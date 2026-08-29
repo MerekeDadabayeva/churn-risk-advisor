@@ -6,9 +6,10 @@ Dual-Framing Explanation & Retention Action Layer for SaaS Churn Risk Scoring.
 This module provides two complementary framings of the SAME underlying reasoning
 from severity_scoring.py:
 1. `csm_explanation` (str): Plain-language, actionable evidence summaries for Customer
-   Success Managers (CSMs), LLM-generated using claude-sonnet-4-6 with strict constraints:
-   referencing actual login frequency, daily minutes, and verbatim ticket quotes, with
-   ZERO invented percentages or probabilities.
+   Success Managers (CSMs), LLM-generated using claude-sonnet-5 (override with the
+   ANTHROPIC_MODEL env var) under strict constraints: referencing actual login
+   frequency, daily minutes, and verbatim ticket quotes, with ZERO invented
+   percentages or probabilities.
 2. `audit_explanation` (dict): Structured diagnostic breakdown containing raw inputs,
    exact rule fired, matched ticket theme, hardcoded historical validation benchmarks,
    and explanation_source ('llm' vs 'template_fallback').
@@ -46,7 +47,7 @@ if not logger.handlers:
 # CONFIGURATION & CONSTANTS
 # =============================================================================
 
-MODEL_NAME = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+MODEL_NAME = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 LLM_TIMEOUT_SECONDS = 8.0
 CACHE_FILE_PATH = Path(__file__).parent / ".llm_cache.json"
 
@@ -406,8 +407,9 @@ def _call_anthropic_api(
     api_key: Optional[str] = None,
 ) -> Optional[Dict[str, str]]:
     """
-    Executes an Anthropic API call using claude-sonnet-4-6 with an 8-second timeout.
-    Returns parsed dict with keys 'csm_explanation' and 'retention_action' or None.
+    Executes an Anthropic API call using MODEL_NAME (default claude-sonnet-5) with
+    an 8-second timeout. Returns parsed dict with keys 'csm_explanation' and
+    'retention_action' or None.
     """
     _load_env_credentials()
     key = api_key or os.environ.get("ANTHROPIC_API_KEY")
