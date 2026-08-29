@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🛡️ Churn Risk Advisor — Daily Triage Desk</title>
+  <meta name="description" content="Customer Success churn-risk triage platform powered by a deterministic 2-Signal Corroboration Engine and Dual-Framing Explanations." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- =======================================================================
+         TOP GLOBAL HEADER & CONTROLS
+         ======================================================================= -->
+    <header class="top-header">
+      <div class="brand-section">
+        <div class="brand-title-wrap">
+          <h1>🛡️ Churn Risk Advisor</h1>
+          <span class="status-badge badge-urgent">Daily Triage Desk</span>
+        </div>
+        <div class="header-badges">
+          <span class="chip">Deterministic 2-Signal Corroboration</span>
+          <span class="chip">Dual-Framing Explanations</span>
+          <span class="chip">Zero Target Leakage</span>
+          <span class="chip chip-mono" id="datasetCohortBadge">Kaggle Benchmark (n=500)</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- 1-Click Focus on Actionable Toggle -->
+        <label class="toggle-card" title="Toggle between actionable accounts (Urgent + Watch) and all accounts including healthy baselines">
+          <span class="toggle-label">⚡ Focus Actionable</span>
+          <div class="switch">
+            <input type="checkbox" id="focusActionableToggle" checked />
+            <span class="slider"></span>
+          </div>
+        </label>
+
+        <!-- CSV Controls -->
+        <input type="file" id="csvFileInput" accept=".csv" style="display: none;" />
+        <button class="btn btn-secondary" id="uploadCsvBtn" title="Upload and evaluate custom customer CSV data">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          Upload CSV
+        </button>
+
+        <button class="btn btn-secondary" id="exportCsvBtn" title="Export triaged and scored dataset to CSV">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Export CSV
+        </button>
+
+        <button class="btn btn-secondary" id="resetDataBtn" title="Reset dataset to default Kaggle benchmark" style="display: none;">
+          Reset Data
+        </button>
+      </div>
+    </header>
+
+    <!-- =======================================================================
+         ZONE 1: PORTFOLIO HEALTH PULSE STRIP
+         ======================================================================= -->
+    <section class="pulse-strip">
+      <div class="kpi-grid">
+        <!-- Urgent KPI Card -->
+        <div class="kpi-card" id="kpiUrgentCard" title="Click to filter Urgent Attention accounts">
+          <div class="kpi-header">
+            <span class="status-dot dot-urgent"></span> Urgent Attention Required
+          </div>
+          <div class="kpi-number" id="urgentCount">135</div>
+          <div class="kpi-caption">
+            <strong>80.7%</strong> Historical Churn · Weak Usage + Negative Ticket
+          </div>
+        </div>
+
+        <!-- Watchlist KPI Card -->
+        <div class="kpi-card" id="kpiWatchCard" title="Click to filter Watchlist accounts">
+          <div class="kpi-header">
+            <span class="status-dot dot-watch"></span> Watchlist / Needs Check-in
+          </div>
+          <div class="kpi-number" id="watchCount">157</div>
+          <div class="kpi-caption">
+            <strong>19.1%</strong> Historical Churn · Moderate Usage + Neutral Ticket
+          </div>
+        </div>
+
+        <!-- Baseline KPI Card -->
+        <div class="kpi-card" id="kpiNoneCard" title="Click to filter Healthy Baseline accounts">
+          <div class="kpi-header">
+            <span class="status-dot dot-none"></span> Healthy Baseline Accounts
+          </div>
+          <div class="kpi-number" id="noneCount">208</div>
+          <div class="kpi-caption">
+            <strong>15.4%</strong> Baseline Churn · Stable Usage · No Friction
+          </div>
+        </div>
+      </div>
+
+      <!-- Proportional Segmented Bar -->
+      <div class="proportion-container" id="proportionBar" title="Portfolio severity distribution">
+        <div class="bar-urgent" id="barUrgent" style="width: 27%;"></div>
+        <div class="bar-watch" id="barWatch" style="width: 31.4%;"></div>
+        <div class="bar-none" id="barNone" style="width: 41.6%;"></div>
+      </div>
+    </section>
+
+    <!-- =======================================================================
+         ZONE 2: TWO-COLUMN INTERACTIVE TRIAGE WORKSPACE
+         ======================================================================= -->
+    <section class="workspace-grid">
+      
+      <!-- LEFT COLUMN: Prioritized Queue & Filters -->
+      <aside class="queue-column">
+        <div class="filter-bar">
+          <!-- Search Box -->
+          <div class="search-input-wrap">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="searchInput" class="search-input" placeholder="Search Customer Name, Email, or Ticket..." />
+          </div>
+
+          <!-- Filter & Sort Controls -->
+          <div class="filter-row">
+            <select id="sortSelect" class="select-control" title="Sorting strategy">
+              <option value="priority">Priority (Urgent First)</option>
+              <option value="mixed">Mixed Sample (Alternating)</option>
+              <option value="usage_asc">Daily Usage (Lowest First)</option>
+              <option value="usage_desc">Daily Usage (Highest First)</option>
+              <option value="name_asc">Name (A → Z)</option>
+            </select>
+
+            <select id="themeSelect" class="select-control" title="Support Ticket Theme Filter">
+              <option value="all">All Ticket Themes</option>
+              <!-- Filled dynamically by app.js -->
+            </select>
+          </div>
+        </div>
+
+        <!-- Queue Header -->
+        <div class="queue-header-row">
+          <div class="queue-title">
+            <span>Prioritized Queue</span>
+            <span class="chip" id="queueCountBadge">0 accounts</span>
+          </div>
+          <div style="font-size: 0.72rem; color: var(--text-muted);" id="triageProgress">
+            0 Triaged
+          </div>
+        </div>
+
+        <!-- Scrollable Account Card List -->
+        <div class="queue-list" id="queueListContainer">
+          <!-- Rendered dynamically by app.js -->
+        </div>
+      </aside>
+
+      <!-- RIGHT COLUMN: Deep-Dive Risk Inspector (Sticky) -->
+      <main class="inspector-column">
+        <div class="inspector-card" id="inspectorContainer">
+          <!-- Rendered dynamically by app.js -->
+        </div>
+      </main>
+
+    </section>
+
+    <!-- =======================================================================
+         ZONE 3: EMPIRICAL CALIBRATION & AUDIT PROOF
+         ======================================================================= -->
+    <section class="calibration-section">
+      <div class="collapsible-container">
+        <div class="collapsible-header" id="calibrationToggle">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>📊</span>
+            <span>Model Auditability, Empirical Calibration & Zero-Target-Leakage Proof</span>
+          </div>
+          <span id="calibrationArrow">▼</span>
+        </div>
+
+        <div class="collapsible-content" id="calibrationContent">
+          <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px;">
+            This platform avoids black-box ML hallucinations by using <strong>deterministic 2-signal corroboration</strong> 
+            and validating predicted severity tiers against actual historical churn outcomes. The ground-truth <code>Churn</code> label 
+            was strictly excluded from the scoring engine to ensure zero target leakage.
+          </p>
+
+          <div class="calibration-grid">
+            <!-- Historical Benchmark Table -->
+            <div style="overflow-x: auto;">
+              <table class="benchmark-table">
+                <thead>
+                  <tr>
+                    <th>Severity Tier</th>
+                    <th>Accounts (n)</th>
+                    <th>Actual Churn Rate</th>
+                    <th>Signal Corroboration</th>
+                    <th>Recommended Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><span class="status-badge badge-urgent"><span class="status-dot dot-urgent"></span> URGENT</span></td>
+                    <td><strong>135</strong> (27.0%)</td>
+                    <td><strong style="color: var(--urgent-text);">80.7%</strong></td>
+                    <td>Weak Usage + Negative Ticket</td>
+                    <td>Immediate Crisis Intervention Call</td>
+                  </tr>
+                  <tr>
+                    <td><span class="status-badge badge-watch"><span class="status-dot dot-watch"></span> WATCH</span></td>
+                    <td><strong>157</strong> (31.4%)</td>
+                    <td><strong style="color: var(--watch-text);">19.1%</strong></td>
+                    <td>Moderate Usage + Neutral Ticket</td>
+                    <td>Proactive Enablement / Feature Walkthrough</td>
+                  </tr>
+                  <tr>
+                    <td><span class="status-badge badge-none"><span class="status-dot dot-none"></span> NONE</span></td>
+                    <td><strong>208</strong> (41.6%)</td>
+                    <td><strong>15.4%</strong></td>
+                    <td>Stable Usage + Routine Ticket</td>
+                    <td>No Action Needed (Baseline Health)</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Monotonic Calibration Bar Chart -->
+            <div class="chart-container">
+              <div class="chart-title">Monotonic Risk Calibration (Historical Churn %)</div>
+              <svg class="svg-chart" viewBox="0 0 320 160" xmlns="http://www.w3.org/2000/svg">
+                <!-- Grid Lines -->
+                <line x1="40" y1="20" x2="300" y2="20" stroke="#E2E8F0" stroke-dasharray="3 3" />
+                <line x1="40" y1="55" x2="300" y2="55" stroke="#E2E8F0" stroke-dasharray="3 3" />
+                <line x1="40" y1="90" x2="300" y2="90" stroke="#E2E8F0" stroke-dasharray="3 3" />
+                <line x1="40" y1="125" x2="300" y2="125" stroke="#CBD5E1" stroke-width="1.5" />
+
+                <!-- Y Axis Labels -->
+                <text x="32" y="24" font-size="9" fill="#94A3B8" text-anchor="end">80%</text>
+                <text x="32" y="59" font-size="9" fill="#94A3B8" text-anchor="end">50%</text>
+                <text x="32" y="94" font-size="9" fill="#94A3B8" text-anchor="end">20%</text>
+                <text x="32" y="128" font-size="9" fill="#94A3B8" text-anchor="end">0%</text>
+
+                <!-- Bars -->
+                <!-- Healthy Bar: 15.4% -> height = 15.4 / 100 * 105 = 16.17px; y = 125 - 16 = 109 -->
+                <rect x="65" y="109" width="45" height="16" rx="3" fill="#10B981" />
+                <text x="87.5" y="103" font-size="10" font-weight="700" fill="#065F46" text-anchor="middle">15.4%</text>
+                <text x="87.5" y="142" font-size="9.5" font-weight="600" fill="#64748B" text-anchor="middle">Healthy</text>
+
+                <!-- Watchlist Bar: 19.1% -> height = 19.1 / 100 * 105 = 20.05px; y = 125 - 20 = 105 -->
+                <rect x="145" y="105" width="45" height="20" rx="3" fill="#D97706" />
+                <text x="167.5" y="99" font-size="10" font-weight="700" fill="#92400E" text-anchor="middle">19.1%</text>
+                <text x="167.5" y="142" font-size="9.5" font-weight="600" fill="#64748B" text-anchor="middle">Watchlist</text>
+
+                <!-- Urgent Bar: 80.7% -> height = 80.7 / 100 * 105 = 84.7px; y = 125 - 85 = 40 -->
+                <rect x="225" y="40" width="45" height="85" rx="3" fill="#DC2626" />
+                <text x="247.5" y="34" font-size="10" font-weight="700" fill="#991B1B" text-anchor="middle">80.7%</text>
+                <text x="247.5" y="142" font-size="9.5" font-weight="700" fill="#DC2626" text-anchor="middle">Urgent</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast" id="toast">
+    <span id="toastIcon">✓</span>
+    <span id="toastMsg">Action completed</span>
+  </div>
+
+  <!-- App Entry Point -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
