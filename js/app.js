@@ -4,25 +4,26 @@
  * Triage-flow controller. One work surface: pick an account, see what to do,
  * mark it done, move to the next. Portfolio numbers live in a separate view.
  *
- * Engine modules (scoring / value / explanations / data) are unchanged — this
- * file is the view + interaction layer.
+ * Accounts are ranked by severity tier and, within a tier, by lowest usage
+ * first. There is no monetary weighting — the app never invents or infers
+ * account value.
  */
 
 import { DEFAULT_DATASET, parseCSV } from './data.js';
 import { scoreDataset } from './scoring.js';
 import { applyExplanations } from './explanations.js';
-import { resolveValueModel, accountValue, formatValue, formatAtRisk, formatPortfolioAtRisk } from './value.js';
 
-// Churn probability per tier when the dataset has no Churn labels to calibrate on.
-const TIER_RISK_FALLBACK = { URGENT: 0.80, WATCH: 0.35, NONE: 0.15 };
-const TOP_N = 12; // default worklist size before "show all"
+const TOP_N = 12;         // default worklist / batch size
+const FLAT_CAP = 100;     // hard ceiling on cards rendered in the flat list
+const CLEARED_CAP = 50;   // hard ceiling on cards rendered in the Cleared group
 
 const TIER_META = {
-  URGENT: { label: 'Urgent',   cls: 'tier-urgent', badge: 'tier-urgent-badge', tone: 'tone-urgent', signal: 'Weak usage + negative ticket', action: 'Immediate intervention call' },
-  WATCH:  { label: 'Watch',    cls: 'tier-watch',  badge: 'tier-watch-badge',  tone: 'tone-watch',  signal: 'Moderate usage + neutral ticket', action: 'Proactive enablement / check-in' },
-  NONE:   { label: 'Healthy',  cls: 'tier-ok',     badge: 'tier-ok-badge',     tone: 'tone-ok',     signal: 'Stable usage + routine ticket', action: 'No action (baseline health)' }
+  URGENT: { label: 'Urgent',  cls: 'tier-urgent', badge: 'tier-urgent-badge', tone: 'tone-urgent', action: 'Immediate intervention call' },
+  WATCH:  { label: 'Watch',   cls: 'tier-watch',  badge: 'tier-watch-badge',  tone: 'tone-watch',  action: 'Proactive enablement / check-in' },
+  NONE:   { label: 'Healthy', cls: 'tier-ok',     badge: 'tier-ok-badge',     tone: 'tone-ok',     action: 'No action (baseline health)' }
 };
 const TIER_ORDER = ['URGENT', 'WATCH', 'NONE'];
+const TIER_RANK = { URGENT: 0, WATCH: 1, NONE: 2 };
 
 // =============================================================================
 // STATE
@@ -32,13 +33,11 @@ const state = {
   rawDataset: [...DEFAULT_DATASET],
   scoredRecords: [],
   calibration: null,
-  valueModel: null,
-  rankingBasis: 'priors',
 
   view: 'triage',
   selectedId: null,
   search: '',
-  sort: 'revenue',
+  sort: 'priority',
   tierFilter: 'actionable',   // 'actionable' | 'URGENT' | 'WATCH' | 'NONE'
   themeFilter: null,
   showAll: false,
@@ -48,6 +47,8 @@ const state = {
   triagedIds: new Set(JSON.parse(localStorage.getItem('churn_triaged_ids') || '[]')),
   isCustomData: false,
 
+  batchIds: [],       // worklist slice whose completion the progress bar tracks
+  _dataVersion: 0,    // bumped on dataset reload to bust the visibleRecords memo
   _flatIds: []
 };
 
@@ -63,13 +64,15 @@ document.addEventListener('DOMContentLoaded', () => {
 function initDataset() {
   const scored = scoreDataset(state.rawDataset);
   state.scoredRecords = applyExplanations(scored);
-  state.scoredRecords.forEach(r => { r.isTriaged = state.triagedIds.has(r.Customer_ID); });
+  state.scoredRecords.forEach((r, i) => {
+    r.isTriaged = state.triagedIds.has(r.Customer_ID);
+    r._raw = state.rawDataset[i] || r;
+  });
 
   state.calibration = computeCalibration(state.scoredRecords);
-  state.valueModel = resolveValueModel(state.rawDataset);
-  annotateValueAtRisk();
+  state._dataVersion++;
+  snapshotBatch();
 
-  // pick a sensible first selection
   const first = undoneInOrder()[0] || visibleRecords()[0];
   state.selectedId = first ? first.Customer_ID : null;
 
@@ -112,32 +115,6 @@ function computeCalibration(records) {
   return out;
 }
 
-// Expected value at risk ABOVE the healthy baseline (baseline churn is the floor,
-// not something a call recovers), so healthy high-value accounts rank near zero.
-function annotateValueAtRisk() {
-  const model = state.valueModel;
-  const cal = state.calibration;
-  const MIN_TIER_N = 30;
-  const stable = !!cal && cal.hasOutcomes && cal.monotonic === true &&
-    TIER_ORDER.every(t => cal.tiers[t].labeledN >= MIN_TIER_N);
-  state.rankingBasis = stable ? 'calibrated' : 'priors';
-
-  const tierProb = (tier) => (stable && cal.tiers[tier].churnRate != null)
-    ? cal.tiers[tier].churnRate / 100
-    : (TIER_RISK_FALLBACK[tier] ?? 0.15);
-  const baseline = tierProb('NONE');
-
-  state.scoredRecords.forEach((r, i) => {
-    const raw = state.rawDataset[i] || r;
-    const prob = tierProb(r.severity_tier);
-    r.account_value = accountValue(raw, model);
-    r.churn_prob = prob;
-    r.addressable_prob = Math.max(prob - baseline, 0);
-    r.value_at_risk = r.account_value * r.addressable_prob;
-    r._raw = raw;
-  });
-}
-
 function matchesSearch(r, q) {
   return (r.Name || '').toLowerCase().includes(q)
     || (r.Email || '').toLowerCase().includes(q)
@@ -148,10 +125,24 @@ function themeOf(r) {
   return r.audit_explanation?.sentiment_raw?.matched_category || 'Routine Support Inquiry';
 }
 
-// filtered + sorted, INCLUDING done items
-function visibleRecords() {
-  let rows = state.scoredRecords.slice();
+// Deterministic ordering: severity tier, then lowest daily usage (most
+// disengaged) first, then id for stability.
+function priorityCompare(a, b) {
+  return (TIER_RANK[a.severity_tier] - TIER_RANK[b.severity_tier])
+    || (a.Daily_Usage_Mins || 0) - (b.Daily_Usage_Mins || 0)
+    || String(a.Customer_ID).localeCompare(String(b.Customer_ID));
+}
 
+// filtered + sorted, INCLUDING done items. Memoised on its filter/sort inputs
+// (marking an account done does not change this list).
+let _visMemo = { key: null, rows: null };
+
+function visibleRecords() {
+  const key = [state.tierFilter, state.themeFilter || '', state.search.trim().toLowerCase(),
+               state.sort, state._dataVersion].join('¦');
+  if (_visMemo.key === key) return _visMemo.rows;
+
+  let rows = state.scoredRecords.slice();
   if (state.tierFilter === 'actionable') {
     rows = rows.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH');
   } else {
@@ -161,17 +152,16 @@ function visibleRecords() {
   const q = state.search.trim().toLowerCase();
   if (q) rows = rows.filter(r => matchesSearch(r, q));
 
-  const s = state.sort;
-  if (s === 'revenue') {
-    rows.sort((a, b) => (b.value_at_risk || 0) - (a.value_at_risk || 0) || (a.Daily_Usage_Mins || 0) - (b.Daily_Usage_Mins || 0));
-  } else if (s === 'priority') {
-    const ord = { URGENT: 0, WATCH: 1, NONE: 2 };
-    rows.sort((a, b) => (ord[a.severity_tier] - ord[b.severity_tier]) || (b.value_at_risk || 0) - (a.value_at_risk || 0));
-  } else if (s === 'usage_asc') {
-    rows.sort((a, b) => (a.Daily_Usage_Mins || 0) - (b.Daily_Usage_Mins || 0));
-  } else if (s === 'name_asc') {
+  if (state.sort === 'priority') {
+    rows.sort(priorityCompare);
+  } else if (state.sort === 'usage_asc') {
+    rows.sort((a, b) => (a.Daily_Usage_Mins || 0) - (b.Daily_Usage_Mins || 0)
+      || String(a.Customer_ID).localeCompare(String(b.Customer_ID)));
+  } else if (state.sort === 'name_asc') {
     rows.sort((a, b) => (a.Name || '').localeCompare(b.Name || ''));
   }
+
+  _visMemo = { key, rows };
   return rows;
 }
 
@@ -179,15 +169,32 @@ function isNarrowed() {
   return state.tierFilter !== 'actionable' || !!state.themeFilter || !!state.search.trim();
 }
 
-// undone rows, capped to the worklist size unless the user narrowed or expanded
+function undoneTotal() {
+  return visibleRecords().reduce((n, r) => n + (r.isTriaged ? 0 : 1), 0);
+}
+
+// undone rows actually rendered: TOP_N by default, more when narrowed/expanded,
+// never more than FLAT_CAP.
 function undoneInOrder() {
   const undone = visibleRecords().filter(r => !r.isTriaged);
-  if (state.showAll || isNarrowed()) return undone;
-  return undone.slice(0, TOP_N);
+  const soft = (state.showAll || isNarrowed()) ? undone.length : TOP_N;
+  return undone.slice(0, Math.min(soft, FLAT_CAP));
 }
 
 function clearedInOrder() {
   return visibleRecords().filter(r => r.isTriaged);
+}
+
+// The batch is the worklist slice whose completion the progress bar tracks —
+// snapshotted so progress stays meaningful with thousands of accounts.
+function worklistOrder() {
+  return state.scoredRecords
+    .filter(r => (r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH') && !r.isTriaged)
+    .sort(priorityCompare);
+}
+
+function snapshotBatch() {
+  state.batchIds = worklistOrder().slice(0, TOP_N).map(r => r.Customer_ID);
 }
 
 // =============================================================================
@@ -209,21 +216,30 @@ function bindEvents() {
     state.triagedIds.clear();
     localStorage.setItem('churn_triaged_ids', '[]');
     state.scoredRecords.forEach(r => { r.isTriaged = false; });
+    snapshotBatch();
     showToast('Triage progress reset');
     renderAll();
   });
 
-  const uploadBtn = document.getElementById('uploadCsvBtn');
+  document.getElementById('nextBatchBtn').addEventListener('click', () => {
+    snapshotBatch();
+    const first = state.batchIds[0] || (undoneInOrder()[0] || {}).Customer_ID;
+    if (first) state.selectedId = first;
+    showToast('New batch');
+    renderAll();
+  });
+
+  document.getElementById('queueScroll').addEventListener('click', onQueueClick);
+
   const csvInput = document.getElementById('csvFileInput');
-  uploadBtn.addEventListener('click', () => csvInput.click());
+  document.getElementById('uploadCsvBtn').addEventListener('click', () => csvInput.click());
   csvInput.addEventListener('change', handleCsvUpload);
 
   document.getElementById('resetDataBtn').addEventListener('click', () => {
     state.rawDataset = [...DEFAULT_DATASET];
     state.isCustomData = false;
     document.getElementById('resetDataBtn').hidden = true;
-    state.tierFilter = 'actionable'; state.themeFilter = null; state.search = ''; state.showAll = false;
-    document.getElementById('searchInput').value = '';
+    resetFilters();
     initDataset();
     showToast('Reset to demo cohort (n=500)');
   });
@@ -233,6 +249,15 @@ function bindEvents() {
   document.getElementById('kpiNone').addEventListener('click', () => jumpToTier('NONE'));
 
   document.addEventListener('keydown', onKeydown);
+}
+
+function resetFilters() {
+  state.tierFilter = 'actionable';
+  state.themeFilter = null;
+  state.search = '';
+  state.showAll = false;
+  const si = document.getElementById('searchInput');
+  if (si) si.value = '';
 }
 
 function onKeydown(e) {
@@ -301,8 +326,12 @@ function markDoneAndNext() {
   const pick = next[idx] || next[idx - 1] || next[next.length - 1] || null;
   state.selectedId = pick ? pick.Customer_ID : null;
 
-  const remaining = next.length;
-  showToast(`${cur.Name} cleared${remaining ? ` · ${remaining} left` : ' · queue clear 🎉'}`);
+  const batchLeft = state.batchIds.filter(id => !state.triagedIds.has(id)).length;
+  if (state.batchIds.includes(cur.Customer_ID) && batchLeft === 0) {
+    showToast(`${cur.Name} cleared · batch done 🎉 — “next batch” for more`);
+  } else {
+    showToast(`${cur.Name} cleared${next.length ? ` · ${batchLeft} left in batch` : ' · all clear 🎉'}`);
+  }
   renderAll();
   scrollSelectedIntoView();
 }
@@ -341,25 +370,26 @@ function scrollSelectedIntoView() {
 // =============================================================================
 
 function renderTopbar() {
-  const cal = state.calibration;
   const actionable = state.scoredRecords.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH');
   const done = actionable.filter(r => r.isTriaged).length;
-  const money = formatPortfolioAtRisk(actionable, state.valueModel);
-  const bits = [`${actionable.length} actionable`, `${done} cleared`];
-  if (money) bits.push(money);
-  document.getElementById('topbarStat').textContent = bits.join('  ·  ');
+  document.getElementById('topbarStat').textContent =
+    `${actionable.length} actionable  ·  ${done} cleared`;
   document.getElementById('resetDataBtn').hidden = !state.isCustomData;
 }
 
 function renderRail() {
-  // progress over the current worklist scope (actionable unless narrowed)
-  const scope = state.tierFilter === 'actionable'
-    ? state.scoredRecords.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH')
-    : state.scoredRecords.filter(r => r.severity_tier === state.tierFilter);
-  const done = scope.filter(r => r.isTriaged).length;
-  const pct = scope.length ? (done / scope.length) * 100 : 0;
-  document.getElementById('progressLabel').textContent = `${done} of ${scope.length} cleared`;
+  // Progress tracks the current BATCH (a snapshotted worklist slice), not the
+  // whole portfolio.
+  const batchDone = state.batchIds.filter(id => state.triagedIds.has(id)).length;
+  const batchSize = state.batchIds.length;
+  const complete = batchSize > 0 && batchDone === batchSize;
+  const pct = batchSize ? (batchDone / batchSize) * 100 : 0;
+  document.getElementById('progressLabel').textContent =
+    batchSize === 0 ? 'Nothing to triage'
+    : complete ? `Batch cleared 🎉  (${batchSize})`
+    : `${batchDone} of ${batchSize} in this batch`;
   document.getElementById('progressFill').style.width = `${pct}%`;
+  document.getElementById('nextBatchBtn').hidden = !complete || undoneTotal() === 0;
 
   // tier facets
   const counts = { URGENT: 0, WATCH: 0, NONE: 0 };
@@ -384,6 +414,9 @@ function renderRail() {
   }));
 
   // theme facets (counts within the current tier scope)
+  const scope = state.tierFilter === 'actionable'
+    ? state.scoredRecords.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH')
+    : state.scoredRecords.filter(r => r.severity_tier === state.tierFilter);
   const themeCounts = {};
   scope.forEach(r => { const t = themeOf(r); themeCounts[t] = (themeCounts[t] || 0) + 1; });
   const themeEntries = Object.entries(themeCounts).sort((a, b) => b[1] - a[1]);
@@ -407,24 +440,17 @@ function renderRail() {
 function renderFilterChips() {
   const wrap = document.getElementById('filterChips');
   const chips = [];
-  if (state.tierFilter !== 'actionable') {
-    chips.push(chipHtml(`Tier: ${TIER_META[state.tierFilter].label}`, 'tier'));
-  }
+  if (state.tierFilter !== 'actionable') chips.push(chipHtml(`Tier: ${TIER_META[state.tierFilter].label}`, 'tier'));
   if (state.themeFilter) chips.push(chipHtml(`Theme: ${state.themeFilter}`, 'theme'));
   if (state.search.trim()) chips.push(chipHtml(`Search: “${state.search.trim()}”`, 'search'));
 
   if (!chips.length) { wrap.hidden = true; wrap.innerHTML = ''; return; }
   wrap.hidden = false;
-  wrap.innerHTML = chips.join('') +
-    `<button class="linkbtn fchip-clear" id="clearFilters">Clear all</button>`;
+  wrap.innerHTML = chips.join('') + `<button class="linkbtn fchip-clear" id="clearFilters">Clear all</button>`;
   wrap.querySelectorAll('.fchip button[data-clear]').forEach(b => {
     b.addEventListener('click', () => clearFilter(b.dataset.clear));
   });
-  document.getElementById('clearFilters').addEventListener('click', () => {
-    state.tierFilter = 'actionable'; state.themeFilter = null; state.search = '';
-    document.getElementById('searchInput').value = '';
-    state.showAll = false; renderAll();
-  });
+  document.getElementById('clearFilters').addEventListener('click', () => { resetFilters(); renderAll(); });
 }
 
 function chipHtml(label, key) {
@@ -464,9 +490,7 @@ function renderQueue() {
         <div>Every account in this view has been triaged.</div>
       </div>`;
   } else {
-    // Group by tier only when sorting by priority AND not already scoped to one
-    // tier. Otherwise (revenue / usage / name, or a tier facet) show a flat list
-    // so the chosen order is honoured across tiers.
+    // Group by tier only under Priority sort on the full actionable view.
     const grouped = state.sort === 'priority' && state.tierFilter === 'actionable';
 
     if (grouped) {
@@ -482,20 +506,21 @@ function renderQueue() {
               <span class="g-count">${rows.length}</span>
               <span class="g-line"></span>
             </div>`;
-          if (!collapsed) {
-            rows.forEach(r => { html += qcardHtml(r); state._flatIds.push(r.Customer_ID); });
-          }
+          if (!collapsed) rows.forEach(r => { html += qcardHtml(r); state._flatIds.push(r.Customer_ID); });
         });
     } else {
       undone.forEach(r => { html += qcardHtml(r); state._flatIds.push(r.Customer_ID); });
     }
 
-    // "show all" affordance
-    const totalUndone = visibleRecords().filter(r => !r.isTriaged).length;
-    if (!state.showAll && !isNarrowed() && totalUndone > undone.length) {
-      html += `<div class="show-all-row">
-        <button class="btn btn-ghost" id="showAllBtn">Show all ${totalUndone} accounts</button>
-      </div>`;
+    const total = undoneTotal();
+    if (undone.length < total) {
+      if (!state.showAll && !isNarrowed()) {
+        html += `<div class="show-all-row">
+          <button class="btn btn-ghost" id="showAllBtn">Show ${Math.min(total, FLAT_CAP)} of ${total}</button>
+        </div>`;
+      } else {
+        html += `<div class="list-note">Showing ${undone.length} of ${total} — refine the filters to narrow this down.</div>`;
+      }
     }
   }
 
@@ -508,38 +533,42 @@ function renderQueue() {
         <span class="g-line"></span>
       </div>`;
     if (state.clearedOpen) {
-      cleared.forEach(r => { html += qcardHtml(r); state._flatIds.push(r.Customer_ID); });
+      cleared.slice(0, CLEARED_CAP).forEach(r => { html += qcardHtml(r); state._flatIds.push(r.Customer_ID); });
+      if (cleared.length > CLEARED_CAP) html += `<div class="list-note">+ ${cleared.length - CLEARED_CAP} more cleared</div>`;
     }
   }
 
   host.innerHTML = html;
+}
 
-  host.querySelectorAll('.qcard').forEach(el => {
-    el.addEventListener('click', () => {
-      state.selectedId = el.dataset.id;
-      renderQueue(); renderInspector();
-    });
-  });
-  host.querySelectorAll('.group-head').forEach(el => {
-    el.addEventListener('click', () => {
-      const g = el.dataset.group;
-      if (g === '__cleared') state.clearedOpen = !state.clearedOpen;
-      else if (state.collapsedGroups.has(g)) state.collapsedGroups.delete(g);
-      else state.collapsedGroups.add(g);
-      renderQueue();
-    });
-  });
-  const showAllBtn = document.getElementById('showAllBtn');
-  if (showAllBtn) showAllBtn.addEventListener('click', () => { state.showAll = true; renderQueue(); });
+// One delegated handler for the whole queue — attached once in bindEvents.
+function onQueueClick(e) {
+  const card = e.target.closest('.qcard');
+  if (card) {
+    state.selectedId = card.dataset.id;
+    renderQueue();
+    renderInspector();
+    return;
+  }
+  const gh = e.target.closest('.group-head');
+  if (gh) {
+    const g = gh.dataset.group;
+    if (g === '__cleared') state.clearedOpen = !state.clearedOpen;
+    else if (state.collapsedGroups.has(g)) state.collapsedGroups.delete(g);
+    else state.collapsedGroups.add(g);
+    renderQueue();
+    return;
+  }
+  if (e.target.closest('#showAllBtn')) {
+    state.showAll = true;
+    renderQueue();
+  }
 }
 
 function qcardHtml(r) {
   const m = TIER_META[r.severity_tier];
   const sel = r.Customer_ID === state.selectedId ? 'is-selected' : '';
   const done = r.isTriaged ? 'is-done' : '';
-  const riskChip = state.valueModel
-    ? `<span class="qcard-risk">${escapeHtml(formatAtRisk(r.account_value, r.addressable_prob, state.valueModel))}</span>`
-    : '';
   const grouped = state.sort === 'priority' && state.tierFilter === 'actionable';
   const tierPrefix = grouped ? '' : `<span class="qcard-tier ${m.cls}">${m.label}</span> · `;
   const sub = `${tierPrefix}${r.Login_Frequency} · ${r.Daily_Usage_Mins}m/day · ${escapeHtml(themeOf(r))}`;
@@ -547,7 +576,7 @@ function qcardHtml(r) {
     <div class="qcard ${m.cls} ${sel} ${done}" data-id="${escapeAttr(r.Customer_ID)}">
       <span class="qcard-accent"></span>
       <span class="qcard-name">${escapeHtml(r.Name || 'Unknown')}</span>
-      ${r.isTriaged ? '<span class="qcard-check">✓</span>' : riskChip}
+      ${r.isTriaged ? '<span class="qcard-check">✓</span>' : ''}
       <span class="qcard-sub">${sub}</span>
     </div>`;
 }
@@ -574,10 +603,6 @@ function renderInspector() {
   const theme = themeOf(r);
   const ticket = audit.sentiment_raw?.ticket_text || r.Last_Support_Ticket || '';
 
-  const riskBadge = state.valueModel
-    ? `<span class="risk-badge" title="Account value ${escapeAttr(formatValue(r.account_value, state.valueModel))} × churn risk above baseline">${escapeHtml(formatAtRisk(r.account_value, r.addressable_prob, state.valueModel))}</span>`
-    : '';
-
   const isNone = tier === 'NONE';
   const emailBlock = isNone ? '' : `
     <details class="email-toggle">
@@ -586,8 +611,6 @@ function renderInspector() {
       <div class="email-box" id="emailBox">${escapeHtml(r.email_draft || '')}</div>
       <div class="action-row"><button class="btn btn-ghost" id="copyEmailBtn">Copy template  ( e )</button></div>
     </details>`;
-
-  const ctx = contextGrid(r);
 
   const commitBar = r.isTriaged
     ? `<div class="commit-bar"><button class="btn btn-lg" id="reopenBtn">Reopen</button></div>`
@@ -606,7 +629,6 @@ function renderInspector() {
       </div>
       <div class="insp-tags">
         <span class="tier-badge ${m.badge}">${m.label}</span>
-        ${riskBadge}
       </div>
     </div>
 
@@ -631,7 +653,7 @@ function renderInspector() {
 
       <div class="insp-section">
         <div class="insp-label">Context</div>
-        <div class="ctx-grid">${ctx}</div>
+        <div class="ctx-grid">${contextGrid(r)}</div>
       </div>
     </div>
 
@@ -659,7 +681,6 @@ function contextGrid(r) {
     ['Ticket theme', themeOf(r)],
     ['Account tenure', tenure != null ? `${tenure} days` : null],
     ['Plan', plan],
-    ['Account value', state.valueModel ? formatValue(r.account_value, state.valueModel) : null],
   ];
   return items.map(([k, v]) => `
     <div class="ctx-item">
@@ -693,17 +714,6 @@ function renderPortfolio() {
   document.getElementById('barWatch').style.width = `${(counts.WATCH / total) * 100}%`;
   document.getElementById('barNone').style.width = `${(counts.NONE / total) * 100}%`;
 
-  const actionable = state.scoredRecords.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH');
-  const money = formatPortfolioAtRisk(actionable, state.valueModel);
-  const basis = state.rankingBasis === 'calibrated'
-    ? "churn rates from this dataset's outcomes"
-    : 'default tier priors (no stable outcome rates in data)';
-  document.getElementById('portfolioRiskLine').innerHTML =
-    (money
-      ? `<strong>${escapeHtml(money)}</strong> across ${actionable.length} actionable accounts`
-      : `Ranking ${actionable.length} actionable accounts by risk-weighted value`) +
-    `<span class="value-source">value: ${escapeHtml(state.valueModel.label)} · risk: ${basis}</span>`;
-
   renderRiskDrivers();
   renderCalibration();
 }
@@ -718,24 +728,15 @@ function renderRiskDrivers() {
     return;
   }
   const byTheme = {};
-  const riskByTheme = {};
-  complaints.forEach(r => {
-    const t = themeOf(r);
-    byTheme[t] = (byTheme[t] || 0) + 1;
-    riskByTheme[t] = (riskByTheme[t] || 0) + (r.value_at_risk || 0);
-  });
+  complaints.forEach(r => { const t = themeOf(r); byTheme[t] = (byTheme[t] || 0) + 1; });
   const entries = Object.entries(byTheme).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const max = Math.max(...entries.map(e => e[1]), 1);
-  chart.innerHTML = entries.map(([t, c]) => {
-    const money = state.valueModel?.mode === 'numeric'
-      ? ` · ${formatAtRisk(riskByTheme[t], 1, state.valueModel).replace('~', '')}`
-      : '';
-    return `<div class="rbar-row">
+  chart.innerHTML = entries.map(([t, c]) => `
+    <div class="rbar-row">
       <span class="rbar-label" title="${escapeAttr(t)}">${escapeHtml(t)}</span>
       <span class="rbar-track"><span class="rbar-fill" style="width:${(c / max) * 100}%"></span></span>
       <span class="rbar-val">${c}</span>
-    </div>`;
-  }).join('');
+    </div>`).join('');
   const top = entries[0];
   insight.innerHTML = `Most common complaint among at-risk accounts: <strong>${escapeHtml(top[0])}</strong> (${top[1]} accounts).`;
 }
@@ -808,8 +809,7 @@ function handleCsvUpload(e) {
       if (!parsed.length) throw new Error('No data rows found.');
       state.rawDataset = parsed;
       state.isCustomData = true;
-      state.tierFilter = 'actionable'; state.themeFilter = null; state.search = ''; state.showAll = false;
-      document.getElementById('searchInput').value = '';
+      resetFilters();
       initDataset();
       showToast(`Loaded ${parsed.length} accounts`);
     } catch (err) {

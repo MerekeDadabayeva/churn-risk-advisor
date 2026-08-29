@@ -42,8 +42,11 @@
         <section class="rail-block">
           <div class="rail-progress">
             <div class="rail-progress-head">
-              <span id="progressLabel">0 of 0 cleared</span>
-              <button class="linkbtn" id="resetProgressBtn" title="Clear all triage marks">reset</button>
+              <span id="progressLabel">0 of 0</span>
+              <span class="rail-progress-actions">
+                <button class="linkbtn" id="nextBatchBtn" hidden>next batch →</button>
+                <button class="linkbtn" id="resetProgressBtn" title="Clear all triage marks">reset</button>
+              </span>
             </div>
             <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
           </div>
@@ -67,8 +70,7 @@
             <input type="text" id="searchInput" class="search-input" placeholder="Search name, email, ticket…  ( / )" />
           </div>
           <select id="sortSelect" class="select" title="Sort order">
-            <option value="revenue">Revenue at risk</option>
-            <option value="priority">Priority (Urgent first)</option>
+            <option value="priority" selected>Priority (Urgent first)</option>
             <option value="usage_asc">Lowest usage</option>
             <option value="name_asc">Name A–Z</option>
           </select>
@@ -113,7 +115,6 @@
         <div class="bar-seg seg-watch" id="barWatch"></div>
         <div class="bar-seg seg-none" id="barNone"></div>
       </div>
-      <p class="portfolio-risk-line" id="portfolioRiskLine"></p>
 
       <section class="panel">
         <h2 class="panel-title">What's driving urgent risk</h2>

@@ -52,17 +52,15 @@ This application is built as a zero-dependency, ultra-fast static web applicatio
 - **Actionable Retention Playbooks**: 6 complaint-tailored intervention playbooks for `URGENT` and 3 check-in playbooks for `WATCH`.
 - **Outreach Email Templates**: Complaint-type starter templates with the customer name and ticket quote filled in — meant to be reviewed and personalized before sending, not sent as-is.
 
-### 3. Revenue-at-Risk Ranking (`js/value.js`)
-- **Ranks by `account value × churn risk above baseline`**, not just tier — so a large `WATCH` account can correctly outrank a tiny `URGENT` one, and healthy high-value accounts sit at ~0 (baseline churn is the floor, not something a call recovers).
-- **Value column auto-detected** from the loaded data, best first: `ARR` → `MRR` → `Contract_Value` → `Account_Value` → `Seats` → a `Plan`/`Tier` text column (mapped Enterprise→5 … Free→1) → account tenure as a rough proxy → equal weight. The chosen source is shown under the portfolio bar.
-- **Risk rates**: uses the dataset's own per-tier churn rates when they are stable (monotonic, ≥30 labelled accounts per tier), otherwise falls back to fixed priors — stated inline so you know which is in play.
-
-### 4. Interactive Fast Triage UI (`index.html`, `js/app.js`, `styles.css`)
-- **Linear/Stripe/Vercel Slate Aesthetic**: Clean, responsive layout with sub-millisecond client-side filtering.
-- **Actionable-First Queue**: Defaults to Urgent + Watch, sorted by revenue at risk; clicking a KPI card drills into a single tier (including Healthy Baseline).
-- **Custom CSV Upload**: Load your own customer CSV in place of the bundled demo cohort and score it in the browser. See `sample_upload.csv` for the expected shape (with optional `ARR` and `Churn` columns).
-- **Persistent Triage Checklist**: Track reviewed accounts with browser `localStorage` persistence.
-- **Empirical Calibration Panel**: Recomputes on every data load — takes the tiers the engine assigned and measures their actual churn rate against the `Churn` outcomes in the same dataset, flagging weak tier separation when it occurs.
+### 3. Triage-Flow UI (`index.html`, `js/app.js`, `styles.css`)
+- **Three-pane work surface**: left rail (tier + ticket-theme facets with counts, batch progress) · queue · inspector. Each pane scrolls on its own; nothing invents or infers account value or revenue.
+- **Ranking**: severity tier first, then lowest daily usage (most disengaged) first. Sort options: Priority, Lowest usage, Name.
+- **Work the queue**: the inspector leads with *Do this now*; **Mark done & next** clears an account and advances. Keyboard: `j`/`k` move, `d` done, `s` skip, `e` copy template, `/` search.
+- **Batch progress**: the rail tracks a snapshotted 12-account worklist (`0 of 12 in this batch`), not the whole portfolio, so it stays meaningful at any dataset size. "Next batch" re-anchors it.
+- **Scales**: default view renders the top 12; flat lists cap at 100 with a "refine" note; the Cleared group caps at 50; one delegated click handler for the whole queue.
+- **Custom CSV Upload**: Load your own customer CSV in place of the bundled cohort. See `sample_upload.csv` for the expected shape (optional `Churn` column enables the calibration panel).
+- **Persistent progress**: reviewed accounts tracked in browser `localStorage`.
+- **Empirical Calibration Panel** (Portfolio view): recomputes on every data load — takes the tiers the engine assigned and measures their actual churn rate against the `Churn` outcomes in the same dataset, flagging weak tier separation when it occurs.
 
 ---
 
@@ -98,14 +96,13 @@ npx serve .
 ├── index.html                  # Main static entry point (HTML5 semantic dashboard)
 ├── styles.css                  # Enterprise SaaS design system (Slate / Indigo theme)
 ├── js/
-│   ├── app.js                  # UI controller, state, filters, calibration & revenue-at-risk wiring
+│   ├── app.js                  # Triage-flow UI controller: state, filters, queue, inspector, calibration
 │   ├── scoring.js              # 2-signal scoring engine + free-text sentiment lexicon (100% parity)
 │   ├── explanations.js         # Plain-language summaries, rule trace, playbooks & email templates
-│   ├── value.js                # Account-value detection + revenue-at-risk ranking
 │   └── data.js                 # Embedded benchmark dataset (n=500) & CSV parser for uploads
 ├── tests/
 │   └── verify_parity.js        # Automated verification script testing JS vs Python logic
-├── sample_upload.csv           # Example custom-upload CSV (ARR + free-text tickets + Churn)
+├── sample_upload.csv           # Example custom-upload CSV (free-text tickets + Churn)
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml          # GitHub Actions workflow for automated Pages deployment

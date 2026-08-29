@@ -1,9 +1,9 @@
-Customer_ID,Name,Email,ARR,Login_Frequency,Daily_Usage_Mins,Last_Support_Ticket,Churn
-c1,BigCo Corp,ops@bigco.com,240000,Weekly,22,"We are seriously considering cancelling - the API has been failing all week and no response from support.",1
-c2,MidCo LLC,team@midco.com,55000,Rarely,8,"Portal keeps going down and we're fed up. This is the last straw.",1
-c3,TinyStartup,hi@tiny.io,2400,Rarely,5,"honestly this is unusable right now, constant errors on upload",1
-c4,MegaEnterprise,cs@mega.com,510000,Daily,44,"Huge thanks to the team, the new sync works perfectly and saved us hours.",0
-c5,Acme Widgets,admin@acme.com,88000,Weekly,25,"Quick question - how do I add more seats to our plan for Q3?",0
-c6,Globex,it@globex.com,130000,Daily,30,"When will the maintenance window end?",0
-c7,Initech,help@initech.com,17000,Rarely,12,"Your renewal quote jumped 45% with no notice, we're evaluating competitors.",1
-c8,Umbrella Co,ops@umbrella.com,95000,Daily,38,"Loving the dashboard redesign, very intuitive!",0
+Customer_ID,Name,Email,Login_Frequency,Daily_Usage_Mins,Last_Support_Ticket,Churn
+c1,BigCo Corp,ops@bigco.com,Weekly,22,We are seriously considering cancelling - the API has been failing all week and no response from support.,1
+c2,MidCo LLC,team@midco.com,Rarely,8,Portal keeps going down and we're fed up. This is the last straw.,1
+c3,TinyStartup,hi@tiny.io,Rarely,5,"honestly this is unusable right now, constant errors on upload",1
+c4,MegaEnterprise,cs@mega.com,Daily,44,"Huge thanks to the team, the new sync works perfectly and saved us hours.",0
+c5,Acme Widgets,admin@acme.com,Weekly,25,Quick question - how do I add more seats to our plan for Q3?,0
+c6,Globex,it@globex.com,Daily,30,When will the maintenance window end?,0
+c7,Initech,help@initech.com,Rarely,12,"Your renewal quote jumped 45% with no notice, we're evaluating competitors.",1
+c8,Umbrella Co,ops@umbrella.com,Daily,38,"Loving the dashboard redesign, very intuitive!",0

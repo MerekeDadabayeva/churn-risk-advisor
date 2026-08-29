@@ -5008,13 +5008,6 @@ export const DEFAULT_DATASET = [
   }
 ];
 
-// Optional value/size columns coerced to numbers on upload (lower-cased header match).
-const NUMERIC_UPLOAD_COLUMNS = new Set([
-  'arr', 'annual_revenue', 'annual_value', 'mrr', 'monthly_revenue',
-  'contract_value', 'acv', 'tcv', 'account_value', 'ltv', 'lifetime_value',
-  'seats', 'licenses', 'seat_count', 'users'
-]);
-
 /**
  * Robust CSV parser handling quoted cells, commas within quotes, escaped quotes, and CRLF/LF.
  */
@@ -5078,9 +5071,6 @@ export function parseCSV(csvText) {
         val = parseFloat(val) || 0;
       } else if (h === 'account_age_days' || h === 'churn') {
         val = val !== '' ? parseInt(val, 10) : null;
-      } else if (NUMERIC_UPLOAD_COLUMNS.has(h)) {
-        const n = parseFloat(String(val).replace(/[$,\s]/g, ''));
-        val = Number.isFinite(n) ? n : 0;
       }
       record[header] = val;
     });

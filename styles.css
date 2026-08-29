@@ -41,10 +41,6 @@
   --ok: #12805C;
   --ok-weak: #E4F4EE;
 
-  /* value / revenue-at-risk — deliberately distinct from tier colors */
-  --risk: #0F766E;
-  --risk-weak: #DBF1EE;
-
   --shadow-1: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .05);
   --shadow-2: 0 4px 12px rgba(16, 24, 40, .08);
   --shadow-pop: 0 12px 32px rgba(16, 24, 40, .16);
@@ -76,9 +72,6 @@
     --ok: #4FC79C;
     --ok-weak: #14322a;
 
-    --risk: #4FBAAE;
-    --risk-weak: #10312f;
-
     --shadow-1: 0 1px 2px rgba(0,0,0,.4);
     --shadow-2: 0 4px 14px rgba(0,0,0,.45);
     --shadow-pop: 0 14px 36px rgba(0,0,0,.55);
@@ -104,8 +97,6 @@
   --watch-weak: #372a17;
   --ok: #4FC79C;
   --ok-weak: #14322a;
-  --risk: #4FBAAE;
-  --risk-weak: #10312f;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -247,9 +238,18 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 8px;
   font-size: 12.5px;
   color: var(--text-dim);
   margin-bottom: 6px;
+}
+.rail-progress-actions { display: flex; gap: 10px; flex: none; }
+
+.list-note {
+  padding: 10px 14px;
+  font-size: 11.5px;
+  color: var(--text-mute);
+  text-align: center;
 }
 .progress-track {
   height: 6px;
@@ -411,13 +411,6 @@ body {
   font-size: 13.5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.qcard-risk {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--risk);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
 .qcard-sub {
   grid-column: 2 / span 2;
   font-size: 12px;
@@ -484,15 +477,6 @@ body {
 .tier-urgent-badge { color: var(--urgent); background: var(--urgent-weak); border-color: color-mix(in srgb, var(--urgent) 30%, transparent); }
 .tier-watch-badge  { color: var(--watch);  background: var(--watch-weak);  border-color: color-mix(in srgb, var(--watch) 30%, transparent); }
 .tier-ok-badge     { color: var(--ok);     background: var(--ok-weak);     border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
-
-.risk-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12px; font-weight: 600;
-  color: var(--risk); background: var(--risk-weak);
-  border: 1px solid color-mix(in srgb, var(--risk) 26%, transparent);
-  padding: 3px 9px; border-radius: 999px;
-  font-variant-numeric: tabular-nums;
-}
 
 .insp-body { padding: 6px 20px 28px; }
 
@@ -652,12 +636,6 @@ body {
 .seg-urgent { background: var(--urgent); }
 .seg-watch  { background: var(--watch); }
 .seg-none   { background: var(--text-mute); }
-
-.portfolio-risk-line {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px;
-  font-size: 13px;
-}
-.portfolio-risk-line .value-source { font-size: 11.5px; color: var(--text-mute); }
 
 .panel {
   border: 1px solid var(--border);
