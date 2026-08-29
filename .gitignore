@@ -44,3 +44,6 @@ venv.bak/
 # Streamlit secrets
 .streamlit/secrets.toml
 
+# LLM cache & local credentials
+.llm_cache.json
+*.env*
