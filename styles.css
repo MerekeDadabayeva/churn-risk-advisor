@@ -360,6 +360,95 @@ input:checked + .slider:before {
 }
 
 /* -----------------------------------------------------------------------------
+   ZONE 1.5: Why Accounts Are At Risk (Portfolio Summary)
+   ----------------------------------------------------------------------------- */
+.risk-drivers-section {
+  margin-bottom: 24px;
+}
+
+.risk-drivers-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 18px 22px;
+  box-shadow: var(--shadow-sm);
+}
+
+.risk-drivers-header {
+  margin-bottom: 12px;
+}
+
+.risk-drivers-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -0.02em;
+  margin-bottom: 2px;
+}
+
+.risk-drivers-caption {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.risk-drivers-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 12px 0 10px 0;
+}
+
+.risk-bar-row {
+  display: grid;
+  grid-template-columns: 260px 1fr 44px;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.78rem;
+}
+
+.risk-bar-label {
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.risk-bar-track {
+  height: 10px;
+  background-color: var(--bg-subtle);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.risk-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: #4F46E5;
+  transition: width 0.4s ease;
+}
+
+.risk-bar-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-main);
+  text-align: right;
+  font-size: 0.76rem;
+}
+
+.risk-drivers-insight {
+  font-size: 0.84rem;
+  color: #334155;
+  font-weight: 500;
+  background-color: #F8FAFC;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--color-primary);
+  padding: 9px 13px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin-top: 10px;
+}
+
+/* -----------------------------------------------------------------------------
    ZONE 2: Two-Column Interactive Triage Workspace
    ----------------------------------------------------------------------------- */
 .workspace-grid {

@@ -433,6 +433,56 @@ else:
     )
 
 # =============================================================================
+# ZONE 1.5: WHY ACCOUNTS ARE AT RISK (PORTFOLIO SUMMARY)
+# =============================================================================
+
+st.markdown("### Why Accounts Are At Risk")
+st.caption(
+    "Aggregated ticket themes across URGENT and WATCH accounts only — "
+    "showing the recurring product/support issues driving today's risk."
+)
+
+# Filter to URGENT and WATCH tier accounts only
+risk_accounts = data[data["severity_tier"].isin(["URGENT", "WATCH"])].copy()
+
+if not risk_accounts.empty:
+    risk_accounts["matched_category"] = risk_accounts["audit_explanation"].apply(
+        lambda x: x.get("sentiment_raw", {}).get("matched_category", "Other")
+        if isinstance(x, dict)
+        else "Other"
+    )
+
+    theme_counts = risk_accounts["matched_category"].value_counts()
+
+    # Limit to top 8 categories, group the rest as "Other"
+    if len(theme_counts) > 8:
+        top_8 = theme_counts.iloc[:8]
+        other_sum = theme_counts.iloc[8:].sum()
+        summary_counts = top_8.copy()
+        if other_sum > 0:
+            summary_counts["Other"] = other_sum
+    else:
+        summary_counts = theme_counts
+
+    chart_data = pd.DataFrame({
+        "Matched Category": summary_counts.index,
+        "Accounts": summary_counts.values,
+    }).set_index("Matched Category")
+
+    # Render horizontal bar chart in muted palette
+    st.bar_chart(chart_data, horizontal=True, color="#4F46E5")
+
+    # Dynamic single-sentence interpretation
+    top_theme = theme_counts.index[0]
+    top_count = theme_counts.iloc[0]
+    st.markdown(
+        f"<div style='font-size: 0.88rem; color: #334155; margin-top: -6px; margin-bottom: 24px; font-weight: 500;'>"
+        f"💡 The single largest driver of risk today is <strong>{top_theme}</strong> ({top_count} accounts)."
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+# =============================================================================
 # ZONE 2: TWO-COLUMN INTERACTIVE TRIAGE WORKSPACE
 # =============================================================================
 

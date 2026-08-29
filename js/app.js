@@ -321,6 +321,7 @@ function applyFiltersAndRender() {
 
   // Render UI
   renderPulseKPIs();
+  renderRiskDriversChart();
   renderQueueList();
   renderInspector();
 }
@@ -328,6 +329,64 @@ function applyFiltersAndRender() {
 // =============================================================================
 // RENDERING FUNCTIONS
 // =============================================================================
+
+function renderRiskDriversChart() {
+  const chartContainer = document.getElementById('riskDriversChart');
+  const insightContainer = document.getElementById('riskDriversInsight');
+  if (!chartContainer || !insightContainer) return;
+
+  // Filter to URGENT and WATCH tier accounts only
+  const riskAccounts = state.scoredRecords.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH');
+
+  if (riskAccounts.length === 0) {
+    chartContainer.innerHTML = '<div style="font-size:0.80rem; color:var(--text-muted); padding:10px 0;">No active risk accounts in current dataset.</div>';
+    insightContainer.innerHTML = 'All accounts in portfolio are currently healthy baselines.';
+    return;
+  }
+
+  // Aggregate counts per matched_category
+  const countsMap = {};
+  riskAccounts.forEach(r => {
+    const cat = r.audit_explanation?.sentiment_raw?.matched_category || 'Other';
+    countsMap[cat] = (countsMap[cat] || 0) + 1;
+  });
+
+  // Sort descending
+  const sortedEntries = Object.entries(countsMap).sort((a, b) => b[1] - a[1]);
+
+  // Top 8 categories, group rest as Other
+  let displayEntries = [];
+  if (sortedEntries.length > 8) {
+    displayEntries = sortedEntries.slice(0, 8);
+    const otherSum = sortedEntries.slice(8).reduce((acc, curr) => acc + curr[1], 0);
+    if (otherSum > 0) {
+      displayEntries.push(['Other', otherSum]);
+    }
+  } else {
+    displayEntries = sortedEntries;
+  }
+
+  const maxVal = Math.max(...displayEntries.map(e => e[1]), 1);
+
+  // Render Horizontal Bars
+  chartContainer.innerHTML = displayEntries.map(([cat, count]) => {
+    const pct = ((count / maxVal) * 100).toFixed(1);
+    return `
+      <div class="risk-bar-row">
+        <div class="risk-bar-label" title="${escapeHtml(cat)}">${escapeHtml(cat)}</div>
+        <div class="risk-bar-track">
+          <div class="risk-bar-fill" style="width: ${pct}%;"></div>
+        </div>
+        <div class="risk-bar-value">${count}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Dynamic Insight Sentence
+  const topTheme = sortedEntries[0][0];
+  const topCount = sortedEntries[0][1];
+  insightContainer.innerHTML = `💡 The single largest driver of risk today is <strong>${escapeHtml(topTheme)}</strong> (${topCount} accounts).`;
+}
 
 function renderPulseKPIs() {
   const urgent = state.scoredRecords.filter(r => r.severity_tier === 'URGENT').length;
