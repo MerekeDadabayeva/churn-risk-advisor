@@ -335,18 +335,18 @@ function renderRiskDriversChart() {
   const insightContainer = document.getElementById('riskDriversInsight');
   if (!chartContainer || !insightContainer) return;
 
-  // Filter to URGENT and WATCH tier accounts only
-  const riskAccounts = state.scoredRecords.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH');
+  // Filter to negative sentiment (actual complaints) only
+  const complaintAccounts = state.scoredRecords.filter(r => r.sentiment_level === 'negative');
 
-  if (riskAccounts.length === 0) {
-    chartContainer.innerHTML = '<div style="font-size:0.80rem; color:var(--text-muted); padding:10px 0;">No active risk accounts in current dataset.</div>';
-    insightContainer.innerHTML = 'All accounts in portfolio are currently healthy baselines.';
+  if (complaintAccounts.length === 0) {
+    chartContainer.innerHTML = '<div style="font-size:0.80rem; color:var(--text-muted); padding:10px 0;">No active complaint accounts in current dataset.</div>';
+    insightContainer.innerHTML = 'No accounts currently exhibiting negative support sentiment.';
     return;
   }
 
   // Aggregate counts per matched_category
   const countsMap = {};
-  riskAccounts.forEach(r => {
+  complaintAccounts.forEach(r => {
     const cat = r.audit_explanation?.sentiment_raw?.matched_category || 'Other';
     countsMap[cat] = (countsMap[cat] || 0) + 1;
   });
@@ -368,14 +368,14 @@ function renderRiskDriversChart() {
 
   const maxVal = Math.max(...displayEntries.map(e => e[1]), 1);
 
-  // Render Horizontal Bars
+  // Render Horizontal Bars with urgent red styling
   chartContainer.innerHTML = displayEntries.map(([cat, count]) => {
     const pct = ((count / maxVal) * 100).toFixed(1);
     return `
       <div class="risk-bar-row">
         <div class="risk-bar-label" title="${escapeHtml(cat)}">${escapeHtml(cat)}</div>
         <div class="risk-bar-track">
-          <div class="risk-bar-fill" style="width: ${pct}%;"></div>
+          <div class="risk-bar-fill" style="width: ${pct}%; background-color: var(--urgent-color);"></div>
         </div>
         <div class="risk-bar-value">${count}</div>
       </div>
@@ -385,7 +385,7 @@ function renderRiskDriversChart() {
   // Dynamic Insight Sentence
   const topTheme = sortedEntries[0][0];
   const topCount = sortedEntries[0][1];
-  insightContainer.innerHTML = `💡 The single largest driver of risk today is <strong>${escapeHtml(topTheme)}</strong> (${topCount} accounts).`;
+  insightContainer.innerHTML = `💡 The most common complaint among at-risk accounts is <strong>${escapeHtml(topTheme)}</strong> (${topCount} accounts).`;
 }
 
 function renderPulseKPIs() {

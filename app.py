@@ -433,51 +433,51 @@ else:
     )
 
 # =============================================================================
-# ZONE 1.5: WHY ACCOUNTS ARE AT RISK (PORTFOLIO SUMMARY)
+# ZONE 1.5: TOP COMPLAINTS DRIVING URGENT RISK (PORTFOLIO SUMMARY)
 # =============================================================================
 
-st.markdown("### Why Accounts Are At Risk")
+st.markdown("### Top Complaints Driving Urgent Risk")
 st.caption(
-    "Aggregated ticket themes across URGENT and WATCH accounts only — "
-    "showing the recurring product/support issues driving today's risk."
+    "Aggregated complaint themes across negative-sentiment accounts — "
+    "showing the primary customer friction points driving urgent churn risk."
 )
 
-# Filter to URGENT and WATCH tier accounts only
-risk_accounts = data[data["severity_tier"].isin(["URGENT", "WATCH"])].copy()
+# Filter to negative sentiment (actual complaints) only
+complaint_accounts = data[data["sentiment_level"] == "negative"].copy()
 
-if not risk_accounts.empty:
-    risk_accounts["matched_category"] = risk_accounts["audit_explanation"].apply(
+if not complaint_accounts.empty:
+    complaint_accounts["matched_category"] = complaint_accounts["audit_explanation"].apply(
         lambda x: x.get("sentiment_raw", {}).get("matched_category", "Other")
         if isinstance(x, dict)
         else "Other"
     )
 
-    theme_counts = risk_accounts["matched_category"].value_counts()
+    complaint_counts = complaint_accounts["matched_category"].value_counts()
 
-    # Limit to top 8 categories, group the rest as "Other"
-    if len(theme_counts) > 8:
-        top_8 = theme_counts.iloc[:8]
-        other_sum = theme_counts.iloc[8:].sum()
+    # Limit to top 8 categories if there are more, group the rest as "Other"
+    if len(complaint_counts) > 8:
+        top_8 = complaint_counts.iloc[:8]
+        other_sum = complaint_counts.iloc[8:].sum()
         summary_counts = top_8.copy()
         if other_sum > 0:
             summary_counts["Other"] = other_sum
     else:
-        summary_counts = theme_counts
+        summary_counts = complaint_counts
 
     chart_data = pd.DataFrame({
-        "Matched Category": summary_counts.index,
+        "Complaint Theme": summary_counts.index,
         "Accounts": summary_counts.values,
-    }).set_index("Matched Category")
+    }).set_index("Complaint Theme")
 
-    # Render horizontal bar chart in muted palette
-    st.bar_chart(chart_data, horizontal=True, color="#4F46E5")
+    # Render horizontal bar chart in muted urgent palette
+    st.bar_chart(chart_data, horizontal=True, color="#DC2626")
 
     # Dynamic single-sentence interpretation
-    top_theme = theme_counts.index[0]
-    top_count = theme_counts.iloc[0]
+    top_complaint = complaint_counts.index[0]
+    top_count = complaint_counts.iloc[0]
     st.markdown(
         f"<div style='font-size: 0.88rem; color: #334155; margin-top: -6px; margin-bottom: 24px; font-weight: 500;'>"
-        f"💡 The single largest driver of risk today is <strong>{top_theme}</strong> ({top_count} accounts)."
+        f"💡 The most common complaint among at-risk accounts is <strong>{top_complaint}</strong> ({top_count} accounts)."
         f"</div>",
         unsafe_allow_html=True,
     )
