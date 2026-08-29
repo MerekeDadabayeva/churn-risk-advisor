@@ -5,17 +5,10 @@
  *
  * Provides:
  * 1. Plain-language CSM summaries quoting real usage metrics and ticket quotes.
- * 2. Deterministic audit trails with raw vectors, rules fired, and empirical benchmarks.
+ * 2. The deterministic rule that fired, for the auditability line in the inspector.
  * 3. Specific retention playbooks (6 Urgent playbooks, 3 Watch check-ins).
- * 4. Context-aware personalized email drafts with 1-click copy capability.
+ * 4. Complaint-type outreach email templates (name + ticket quote filled in).
  */
-
-// Historical Validation Benchmarks
-export const TIER_VALIDATION_NOTES = {
-  URGENT: "Tier validated by historical data: 80.7% churn rate (n=135 accounts).",
-  WATCH: "Tier validated by historical data: 19.1% churn rate (n=157 accounts).",
-  NONE: "Tier validated by historical data: 15.4% churn rate (n=208 accounts)."
-};
 
 export const URGENT_CLOSING_VARIATIONS = [
   "This drop in engagement combined with a critical support complaint historically precedes account cancellation.",
@@ -449,7 +442,7 @@ export function generateExplanation(scoredCustomer) {
     }
   }
 
-  // 2. Structured Audit Trail
+  // 2. Deterministic rule trace (matched_category also feeds the theme filter + chart)
   const matchedCategory = TICKET_CATEGORIES[ticketText] || "Routine Support Inquiry";
   let ruleFired = "";
   if (engLevel === "weak" && sentLevel === "negative") {
@@ -459,8 +452,6 @@ export function generateExplanation(scoredCustomer) {
   } else {
     ruleFired = `baseline combination (${engLevel} engagement, ${sentLevel} sentiment) -> NONE`;
   }
-
-  const tierValidationNote = TIER_VALIDATION_NOTES[tier] || "Tier evaluated using deterministic 3-tier corroboration rules.";
 
   const auditExplanation = {
     engagement_raw: {
@@ -473,8 +464,7 @@ export function generateExplanation(scoredCustomer) {
       matched_category: matchedCategory,
       sentiment_level: sentLevel
     },
-    rule_fired: ruleFired,
-    tier_validation_note: tierValidationNote
+    rule_fired: ruleFired
   };
 
   // 3. Playbook & Email Draft

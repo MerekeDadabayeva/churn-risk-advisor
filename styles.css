@@ -772,6 +772,35 @@ input:checked + .slider:before {
   font-size: 0.72rem;
 }
 
+/* Revenue-at-risk chip (queue cards + inspector) */
+.chip-risk {
+  background-color: #FEF3C7;
+  border-color: #FCD34D;
+  color: #92400E;
+  white-space: nowrap;
+}
+
+/* Portfolio revenue-at-risk line under the segmented bar */
+.portfolio-risk-line {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  font-size: 0.82rem;
+  color: var(--text-main);
+}
+
+.portfolio-risk-line .value-source {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.portfolio-risk-line .value-source::before {
+  content: "•";
+  margin-right: 8px;
+  color: var(--border-color);
+}
+
 /* Badges */
 .status-badge {
   display: inline-flex;

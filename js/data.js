@@ -1,7 +1,7 @@
 /**
  * data.js
  * =======
- * Data loading, CSV parsing, default dataset, and CSV exporting utilities.
+ * Bundled demo dataset and CSV parsing for custom uploads.
  */
 
 // Embedded Kaggle SaaS Benchmark Dataset (n=500)
@@ -5008,6 +5008,13 @@ export const DEFAULT_DATASET = [
   }
 ];
 
+// Optional value/size columns coerced to numbers on upload (lower-cased header match).
+const NUMERIC_UPLOAD_COLUMNS = new Set([
+  'arr', 'annual_revenue', 'annual_value', 'mrr', 'monthly_revenue',
+  'contract_value', 'acv', 'tcv', 'account_value', 'ltv', 'lifetime_value',
+  'seats', 'licenses', 'seat_count', 'users'
+]);
+
 /**
  * Robust CSV parser handling quoted cells, commas within quotes, escaped quotes, and CRLF/LF.
  */
@@ -5065,11 +5072,15 @@ export function parseCSV(csvText) {
     const record = {};
     headers.forEach((header, colIdx) => {
       let val = values[colIdx] !== undefined ? values[colIdx].replace(/^"|"$/g, '') : '';
+      const h = header.toLowerCase();
       // Parse numeric fields if applicable
-      if (header === 'Daily_Usage_Mins' || header === 'daily_usage_mins') {
+      if (h === 'daily_usage_mins') {
         val = parseFloat(val) || 0;
-      } else if (header === 'Account_Age_Days' || header === 'account_age_days' || header === 'Churn' || header === 'churn') {
+      } else if (h === 'account_age_days' || h === 'churn') {
         val = val !== '' ? parseInt(val, 10) : null;
+      } else if (NUMERIC_UPLOAD_COLUMNS.has(h)) {
+        const n = parseFloat(String(val).replace(/[$,\s]/g, ''));
+        val = Number.isFinite(n) ? n : 0;
       }
       record[header] = val;
     });
@@ -5079,57 +5090,3 @@ export function parseCSV(csvText) {
   return records;
 }
 
-/**
- * Exports scored and enriched records to a downloadable CSV string.
- */
-export function exportToCSV(records) {
-  if (!records || !records.length) return '';
-
-  const columns = [
-    'Customer_ID',
-    'Name',
-    'Email',
-    'severity_tier',
-    'engagement_level',
-    'sentiment_level',
-    'Login_Frequency',
-    'Daily_Usage_Mins',
-    'Last_Support_Ticket',
-    'retention_action',
-    'csm_explanation',
-    'triaged_status'
-  ];
-
-  const escapeCell = (val) => {
-    if (val === null || val === undefined) return '""';
-    const str = String(val).replace(/"/g, '""');
-    return `"${str}"`;
-  };
-
-  const headerRow = columns.join(',');
-  const rows = records.map(r => {
-    return columns.map(col => {
-      if (col === 'triaged_status') {
-        return escapeCell(r.isTriaged ? 'Triaged' : 'Pending');
-      }
-      return escapeCell(r[col] !== undefined ? r[col] : (r.raw_signal_values && r.raw_signal_values[col]));
-    }).join(',');
-  });
-
-  return [headerRow, ...rows].join('\n');
-}
-
-/**
- * Downloads a string content as a file in the browser.
- */
-export function downloadFile(filename, content, mimeType = 'text/csv;charset=utf-8;') {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}

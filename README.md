@@ -39,25 +39,30 @@ This application is built as a zero-dependency, ultra-fast static web applicatio
   - *Weak*: `Login_Frequency == "Rarely"` OR `Daily_Usage_Mins < 20`
   - *Strong*: `Login_Frequency == "Daily"` AND `Daily_Usage_Mins >= 35`
   - *Moderate*: Intermediate patterns
-- **Signal 2 (Ticket Sentiment)**: Categorizes customer support tickets against 18 empirical templates (Negative, Neutral, Positive).
+- **Signal 2 (Ticket Sentiment)**: Matches the last support ticket against 18 empirical templates first; anything else (real uploaded tickets) falls through to a free-text lexicon scan for negative / positive / neutral cues. A pre-scored `Sentiment` column, if present, overrides both. Churn risk is asymmetric, so a negative/positive tie resolves to negative.
 - **Corroboration Logic**:
-  - 🚨 **`URGENT`** (80.7% Historical Churn): Weak engagement + Negative complaint.
-  - ⚠️ **`WATCH`** (19.1% Historical Churn): Moderate engagement + Neutral ticket.
-  - ✅ **`NONE`** (15.4% Baseline Churn): Healthy / stable accounts.
-- **Zero Target Leakage**: `Churn` labels are never used during scoring.
+  - 🚨 **`URGENT`**: Weak engagement + Negative complaint.
+  - ⚠️ **`WATCH`**: Moderate engagement + Neutral ticket.
+  - ✅ **`NONE`**: Healthy / stable accounts.
+- **Zero Target Leakage**: `Churn` labels are never used during scoring. On the bundled Kaggle cohort (n=500) the assigned tiers back-test to 80.7% / 19.1% / 15.4% actual churn — note that `WATCH` sits only ~3.7 points above the `NONE` baseline, so it separates real churn weakly.
 
 ### 2. Dual-Framing Explanation Layer (`js/explanations.js` / `explanation_layer.py`)
 - **CSM Plain-Language Summary**: Non-technical evidence quoting actual login frequencies, daily minutes, and verbatim ticket text.
-- **Collapsible Audit Trail**: Structured diagnostic breakdown with deterministic rule fired, matched theme, and validation statistics.
+- **Deterministic Rule Trace**: A one-line record of the exact corroboration rule that fired, shown inline in the inspector — no black-box score.
 - **Actionable Retention Playbooks**: 6 complaint-tailored intervention playbooks for `URGENT` and 3 check-in playbooks for `WATCH`.
-- **1-Click Personalized Email Drafts**: Context-aware outreach emails ready to copy and send.
+- **Outreach Email Templates**: Complaint-type starter templates with the customer name and ticket quote filled in — meant to be reviewed and personalized before sending, not sent as-is.
 
-### 3. Interactive Fast Triage UI (`index.html`, `js/app.js`, `styles.css`)
+### 3. Revenue-at-Risk Ranking (`js/value.js`)
+- **Ranks by `account value × churn risk above baseline`**, not just tier — so a large `WATCH` account can correctly outrank a tiny `URGENT` one, and healthy high-value accounts sit at ~0 (baseline churn is the floor, not something a call recovers).
+- **Value column auto-detected** from the loaded data, best first: `ARR` → `MRR` → `Contract_Value` → `Account_Value` → `Seats` → a `Plan`/`Tier` text column (mapped Enterprise→5 … Free→1) → account tenure as a rough proxy → equal weight. The chosen source is shown under the portfolio bar.
+- **Risk rates**: uses the dataset's own per-tier churn rates when they are stable (monotonic, ≥30 labelled accounts per tier), otherwise falls back to fixed priors — stated inline so you know which is in play.
+
+### 4. Interactive Fast Triage UI (`index.html`, `js/app.js`, `styles.css`)
 - **Linear/Stripe/Vercel Slate Aesthetic**: Clean, responsive layout with sub-millisecond client-side filtering.
-- **1-Click "⚡ Focus on Actionable" Toggle**: Instantly isolate Urgent + Watch accounts for morning triage.
-- **Custom CSV Upload & Export**: Drag-and-drop or select any CSV dataset to score in real-time, and export scored results with 1 click.
+- **Actionable-First Queue**: Defaults to Urgent + Watch, sorted by revenue at risk; clicking a KPI card drills into a single tier (including Healthy Baseline).
+- **Custom CSV Upload**: Load your own customer CSV in place of the bundled demo cohort and score it in the browser. See `sample_upload.csv` for the expected shape (with optional `ARR` and `Churn` columns).
 - **Persistent Triage Checklist**: Track reviewed accounts with browser `localStorage` persistence.
-- **Empirical Calibration Panel**: Monotonic calibration chart and validation benchmark cohort proof.
+- **Empirical Calibration Panel**: Recomputes on every data load — takes the tiers the engine assigned and measures their actual churn rate against the `Churn` outcomes in the same dataset, flagging weak tier separation when it occurs.
 
 ---
 
@@ -93,12 +98,14 @@ npx serve .
 ├── index.html                  # Main static entry point (HTML5 semantic dashboard)
 ├── styles.css                  # Enterprise SaaS design system (Slate / Indigo theme)
 ├── js/
-│   ├── app.js                  # UI controller, state management, search, filters & charts
-│   ├── scoring.js              # Client-side 2-signal scoring engine (100% parity)
-│   ├── explanations.js         # Dual-framing summaries, playbooks & email draft generator
-│   └── data.js                 # Embedded benchmark dataset (n=500), CSV parser & exporter
+│   ├── app.js                  # UI controller, state, filters, calibration & revenue-at-risk wiring
+│   ├── scoring.js              # 2-signal scoring engine + free-text sentiment lexicon (100% parity)
+│   ├── explanations.js         # Plain-language summaries, rule trace, playbooks & email templates
+│   ├── value.js                # Account-value detection + revenue-at-risk ranking
+│   └── data.js                 # Embedded benchmark dataset (n=500) & CSV parser for uploads
 ├── tests/
 │   └── verify_parity.js        # Automated verification script testing JS vs Python logic
+├── sample_upload.csv           # Example custom-upload CSV (ARR + free-text tickets + Churn)
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml          # GitHub Actions workflow for automated Pages deployment
