@@ -87,6 +87,61 @@ POSITIVE_TEMPLATES = {
     "Just upgraded to the Pro plan, excited to use it.",
 }
 
+# =============================================================================
+# FREE-TEXT FALLBACK LEXICON (for real tickets that are not one of the 18)
+# Matched as case-insensitive substrings. Mirrors js/scoring.js.
+# =============================================================================
+
+NEGATIVE_KEYWORDS = [
+    "cancel", "canceling", "cancelling", "cancellation", "refund", "terminate",
+    "downgrade", "churn", "unacceptable", "frustrat", "angry", "furious", "upset",
+    "disappointed", "unhappy", "not happy", "broken", "crash", "bug", "glitch",
+    "error", "fails", "failing", "failure", "not working", "doesn't work",
+    "does not work", "won't work", "can't log in", "cannot log in", "locked out",
+    "downtime", "outage", "down again", "keeps going down", "slow", "laggy",
+    "unusable", "useless", "worthless", "overcharge", "overcharged",
+    "double charged", "charged twice", "billing issue", "billing problem",
+    "price increase", "wrong price", "no response", "no reply", "still waiting",
+    "been waiting", "waiting for", "ignored", "escalate", "escalation",
+    "complaint", "complain", "lawyer", "legal", "competitor", "switching to",
+    "moving to", "moving away", "leaving", "worst", "terrible", "awful",
+    "horrible", "ridiculous", "disaster", "regret", "misled", "scam", "fed up",
+    "last straw", "not renewing", "won't renew", "will not renew",
+]
+
+POSITIVE_KEYWORDS = [
+    "thank", "thanks", "appreciate", "love it", "love the", "love this",
+    "great job", "great work", "works great", "awesome", "excellent", "fantastic",
+    "brilliant", "perfect", "works perfectly", "super helpful", "very helpful",
+    "really helpful", "so helpful", "life saver", "lifesaver", "saved us",
+    "saved my team", "time saver", "huge time", "smooth", "seamless",
+    "easy to use", "intuitive", "impressed", "happy with", "very happy",
+    "really happy", "excited", "delighted", "highly recommend", "would recommend",
+    "keep it up", "no complaints", "no issues", "big fan",
+]
+
+NEUTRAL_CUES = [
+    "how do i", "how can i", "how to", "where do i", "where is", "when will",
+    "is there a", "can i", "could you", "would it be possible", "need to update",
+    "want to change", "change my", "update my", "reset my", "add more seats",
+    "add seats", "upgrade my plan", "checking if", "just checking",
+    "quick question", "question about", "tutorial", "documentation", "onboarding",
+    "invoice", "receipt", "confirm my", "verify",
+]
+
+_SENTIMENT_ALIASES = {
+    "negative": "negative", "neg": "negative", "bad": "negative", "detractor": "negative", "-1": "negative",
+    "positive": "positive", "pos": "positive", "good": "positive", "promoter": "positive", "1": "positive",
+    "neutral": "neutral", "neu": "neutral", "passive": "neutral", "0": "neutral",
+}
+
+
+def normalize_sentiment_field(value: Optional[Any]) -> Optional[str]:
+    """Normalizes a pre-scored sentiment column value, or returns None if unrecognized."""
+    if value is None:
+        return None
+    return _SENTIMENT_ALIASES.get(str(value).strip().lower())
+
 
 # =============================================================================
 # SIGNAL COMPUTATION FUNCTIONS
@@ -139,47 +194,56 @@ def compute_engagement_signal(login_frequency: str, daily_usage_mins: float) -> 
     return "moderate"
 
 
-def compute_sentiment_signal(ticket_text: str) -> str:
+def compute_sentiment_signal(ticket_text: str, explicit_sentiment: Optional[Any] = None) -> str:
     """
     Computes Signal 2: Ticket Sentiment from Last_Support_Ticket text.
 
-    Reasoning:
-    ----------
-    Support tickets capture explicit customer satisfaction and friction points.
-    Tickets are matched against the 18 known template strings:
-    - 6 Negative templates signify severe friction (churn rate ~80-85%).
-    - 6 Neutral templates signify operational requests (churn rate ~16-21%).
-    - 6 Positive templates signify customer delight (churn rate 0-10%).
-
-    If an unfamiliar string is encountered, it is labeled "unknown" and a warning
-    is logged without terminating execution.
-
-    Parameters:
-    -----------
-    ticket_text : str
-        Raw string from the Last_Support_Ticket column.
+    Resolution order:
+    -----------------
+    0. An explicit pre-scored sentiment column value, if provided.
+    1. Exact match against the 18 known template strings (keeps demo-set parity exact).
+    2. Free-text lexicon scan for real uploaded tickets. Churn risk is asymmetric,
+       so a tie between negative and positive hits resolves to "negative".
 
     Returns:
     --------
     str: "negative", "neutral", "positive", or "unknown".
     """
+    explicit = normalize_sentiment_field(explicit_sentiment)
+    if explicit:
+        return explicit
+
     if ticket_text is None:
-        logger.warning("Empty/None ticket text encountered; classifying as unknown.")
         return "unknown"
 
     text = str(ticket_text).strip()
+    if not text:
+        return "unknown"
 
+    # 1. Exact template match
     if text in NEGATIVE_TEMPLATES:
         return "negative"
-    elif text in NEUTRAL_TEMPLATES:
+    if text in NEUTRAL_TEMPLATES:
         return "neutral"
-    elif text in POSITIVE_TEMPLATES:
+    if text in POSITIVE_TEMPLATES:
         return "positive"
-    else:
-        logger.warning(
-            f"Unrecognized support ticket template encountered: '{text}'. Classifying as 'unknown'."
-        )
-        return "unknown"
+
+    # 2. Free-text lexicon fallback
+    lower = text.lower()
+    neg = sum(1 for kw in NEGATIVE_KEYWORDS if kw in lower)
+    pos = sum(1 for kw in POSITIVE_KEYWORDS if kw in lower)
+
+    if neg > 0 and neg >= pos:
+        return "negative"
+    if pos > 0:
+        return "positive"
+    if any(cue in lower for cue in NEUTRAL_CUES):
+        return "neutral"
+
+    logger.warning(
+        f"Ticket text did not match any template or lexicon cue: '{text}'. Classifying as 'unknown'."
+    )
+    return "unknown"
 
 
 def determine_severity_tier(engagement_level: str, sentiment_level: str) -> str:
@@ -267,10 +331,16 @@ def score_customer(row: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
         else row_dict.get("daily_usage_mins", 0)
     )
     ticket = row_dict.get("Last_Support_Ticket") or row_dict.get("last_support_ticket") or ""
+    explicit_sentiment = (
+        row_dict.get("Sentiment")
+        or row_dict.get("sentiment")
+        or row_dict.get("Ticket_Sentiment")
+        or row_dict.get("ticket_sentiment")
+    )
 
     # Compute Signal 1 & Signal 2
     engagement = compute_engagement_signal(login_freq, daily_mins)
-    sentiment = compute_sentiment_signal(ticket)
+    sentiment = compute_sentiment_signal(ticket, explicit_sentiment)
 
     # Compute Severity Tier
     severity = determine_severity_tier(engagement, sentiment)

@@ -5,9 +5,13 @@
  * Built for high-speed morning triage and deep auditability.
  */
 
-import { DEFAULT_DATASET, parseCSV, exportToCSV, downloadFile } from './data.js';
+import { DEFAULT_DATASET, parseCSV } from './data.js';
 import { scoreDataset } from './scoring.js';
 import { applyExplanations } from './explanations.js';
+import { resolveValueModel, accountValue, formatValue, formatAtRisk, formatPortfolioAtRisk } from './value.js';
+
+// Churn probability per tier when the dataset carries no Churn labels to calibrate on.
+const TIER_RISK_FALLBACK = { URGENT: 0.80, WATCH: 0.35, NONE: 0.15 };
 
 // =============================================================================
 // APPLICATION STATE
@@ -18,13 +22,21 @@ const state = {
   scoredRecords: [],
   filteredRecords: [],
   selectedCustomerId: null,
-  focusActionable: true,
   searchQuery: '',
   selectedTheme: 'all',
-  sortBy: 'priority',
-  activeTierFilter: null, // null or 'URGENT' | 'WATCH' | 'NONE'
+  sortBy: 'revenue',
+  activeTierFilter: null, // null (Urgent + Watch queue) or 'URGENT' | 'WATCH' | 'NONE'
   triagedIds: new Set(JSON.parse(localStorage.getItem('churn_triaged_ids') || '[]')),
-  isCustomData: false
+  isCustomData: false,
+  calibration: null, // recomputed from loaded data on every initDataset()
+  valueModel: null   // how account value is derived for revenue-at-risk ranking
+};
+
+// Static per-tier reference copy for the calibration table (not outcome data).
+const TIER_META = {
+  URGENT: { label: 'URGENT', badge: 'badge-urgent', dot: 'dot-urgent', signal: 'Weak usage + negative ticket', action: 'Immediate intervention call' },
+  WATCH:  { label: 'WATCH',  badge: 'badge-watch',  dot: 'dot-watch',  signal: 'Moderate usage + neutral ticket', action: 'Proactive enablement / check-in' },
+  NONE:   { label: 'NONE',   badge: 'badge-none',   dot: 'dot-none',   signal: 'Stable usage + routine ticket', action: 'No action (baseline health)' }
 };
 
 // =============================================================================
@@ -46,6 +58,14 @@ function initDataset() {
     r.isTriaged = state.triagedIds.has(r.Customer_ID);
   });
 
+  // Recompute empirical calibration from whatever data is now loaded
+  state.calibration = computeCalibration(state.scoredRecords);
+  renderCalibrationPanel();
+
+  // Resolve account-value model and annotate each record with revenue-at-risk
+  state.valueModel = resolveValueModel(state.rawDataset);
+  annotateValueAtRisk();
+
   // Populate theme dropdown
   populateThemeOptions();
 
@@ -58,17 +78,6 @@ function initDataset() {
 // =============================================================================
 
 function bindEvents() {
-  // 1-Click Actionable Toggle
-  const focusToggle = document.getElementById('focusActionableToggle');
-  if (focusToggle) {
-    focusToggle.addEventListener('change', (e) => {
-      state.focusActionable = e.target.checked;
-      state.activeTierFilter = null; // reset specific KPI click
-      updateKpiCardStyles();
-      applyFiltersAndRender();
-    });
-  }
-
   // Search Input
   const searchInput = document.getElementById('searchInput');
   if (searchInput) {
@@ -113,17 +122,6 @@ function bindEvents() {
     csvInput.addEventListener('change', handleCsvUpload);
   }
 
-  // CSV Export Button
-  const exportBtn = document.getElementById('exportCsvBtn');
-  if (exportBtn) {
-    exportBtn.addEventListener('click', () => {
-      const csvStr = exportToCSV(state.scoredRecords);
-      const filename = `churn_risk_scored_${new Date().toISOString().slice(0, 10)}.csv`;
-      downloadFile(filename, csvStr);
-      showToast('Scored dataset exported successfully!', '📥');
-    });
-  }
-
   // Reset Dataset Button
   const resetBtn = document.getElementById('resetDataBtn');
   if (resetBtn) {
@@ -154,17 +152,8 @@ function bindEvents() {
 }
 
 function toggleTierFilter(tier) {
-  if (state.activeTierFilter === tier) {
-    state.activeTierFilter = null;
-  } else {
-    state.activeTierFilter = tier;
-    // Uncheck actionable toggle if clicking NONE
-    if (tier === 'NONE' && state.focusActionable) {
-      state.focusActionable = false;
-      const toggle = document.getElementById('focusActionableToggle');
-      if (toggle) toggle.checked = false;
-    }
-  }
+  // Clicking the active tier returns to the default Urgent + Watch triage queue.
+  state.activeTierFilter = state.activeTierFilter === tier ? null : tier;
   updateKpiCardStyles();
   applyFiltersAndRender();
 }
@@ -255,10 +244,11 @@ function populateThemeOptions() {
 function applyFiltersAndRender() {
   let records = [...state.scoredRecords];
 
-  // 1. Actionable vs All Filter
+  // 1. Tier filter: a specific tier when a KPI card is selected, otherwise the
+  //    default triage queue of actionable accounts (Urgent + Watch only).
   if (state.activeTierFilter) {
     records = records.filter(r => r.severity_tier === state.activeTierFilter);
-  } else if (state.focusActionable) {
+  } else {
     records = records.filter(r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH');
   }
 
@@ -282,12 +272,19 @@ function applyFiltersAndRender() {
   }
 
   // 4. Sorting
-  if (state.sortBy === 'priority') {
+  if (state.sortBy === 'revenue') {
+    // Cross-tier: a large WATCH account can outrank a tiny URGENT one.
+    records.sort((a, b) => {
+      const diff = (b.value_at_risk || 0) - (a.value_at_risk || 0);
+      if (diff !== 0) return diff;
+      return (a.Daily_Usage_Mins || 0) - (b.Daily_Usage_Mins || 0);
+    });
+  } else if (state.sortBy === 'priority') {
     const tierOrder = { URGENT: 0, WATCH: 1, NONE: 2 };
     records.sort((a, b) => {
       const tierDiff = tierOrder[a.severity_tier] - tierOrder[b.severity_tier];
       if (tierDiff !== 0) return tierDiff;
-      return (a.Daily_Usage_Mins || 0) - (b.Daily_Usage_Mins || 0);
+      return (b.value_at_risk || 0) - (a.value_at_risk || 0);
     });
   } else if (state.sortBy === 'mixed') {
     const urgent = records.filter(r => r.severity_tier === 'URGENT');
@@ -388,6 +385,173 @@ function renderRiskDriversChart() {
   insightContainer.innerHTML = `💡 The most common complaint among at-risk accounts is <strong>${escapeHtml(topTheme)}</strong> (${topCount} accounts).`;
 }
 
+// =============================================================================
+// EMPIRICAL CALIBRATION (recomputed from loaded data)
+// =============================================================================
+
+function computeCalibration(records) {
+  const tiers = ['URGENT', 'WATCH', 'NONE'];
+  const total = records.length;
+  const out = { total, labeled: 0, tiers: {} };
+
+  tiers.forEach(t => {
+    const inTier = records.filter(r => r.severity_tier === t);
+    const withLabel = inTier.filter(r => r.Churn === 0 || r.Churn === 1);
+    const churned = withLabel.filter(r => r.Churn === 1).length;
+    out.labeled += withLabel.length;
+    out.tiers[t] = {
+      n: inTier.length,
+      share: total ? (inTier.length / total) * 100 : 0,
+      labeledN: withLabel.length,
+      churned,
+      churnRate: withLabel.length ? (churned / withLabel.length) * 100 : null
+    };
+  });
+
+  out.hasOutcomes = out.labeled > 0;
+  const u = out.tiers.URGENT.churnRate;
+  const w = out.tiers.WATCH.churnRate;
+  const n = out.tiers.NONE.churnRate;
+  out.monotonic = (u != null && w != null && n != null) ? (u >= w && w >= n) : null;
+  out.watchWeak = (w != null && n != null) ? Math.abs(w - n) < 5 : null;
+  return out;
+}
+
+function fmtPct(v, digits = 1) {
+  return v == null ? 'n/a' : `${v.toFixed(digits)}%`;
+}
+
+// Annotate each scored record with account value, churn probability, and
+// expected value at risk. "At risk" is measured ABOVE the healthy baseline —
+// baseline churn is the floor every account carries, not something a CSM call
+// can recover — so a healthy high-value account ranks near zero, not near the top.
+// Raw rows carry the value columns and scoreDataset preserves order: join by index.
+function annotateValueAtRisk() {
+  const model = state.valueModel;
+  const cal = state.calibration;
+
+  // Trust the dataset's own churn rates for ranking only when they are stable:
+  // monotonic across tiers and each tier has enough labelled accounts. Otherwise
+  // a small or noisy upload could zero out a whole tier — fall back to priors.
+  const MIN_TIER_N = 30;
+  const stable = !!cal && cal.hasOutcomes && cal.monotonic === true &&
+    ['URGENT', 'WATCH', 'NONE'].every(t => cal.tiers[t].labeledN >= MIN_TIER_N);
+
+  const tierProb = (tier) => (stable && cal.tiers[tier].churnRate != null)
+    ? cal.tiers[tier].churnRate / 100
+    : (TIER_RISK_FALLBACK[tier] ?? 0.15);
+
+  const baseline = tierProb('NONE');
+  state.rankingBasis = stable ? 'calibrated' : 'priors';
+
+  state.scoredRecords.forEach((r, i) => {
+    const rawRow = state.rawDataset[i] || r;
+    const prob = tierProb(r.severity_tier);
+    r.account_value = accountValue(rawRow, model);
+    r.churn_prob = prob;
+    r.addressable_prob = Math.max(prob - baseline, 0);
+    r.value_at_risk = r.account_value * r.addressable_prob;
+  });
+}
+
+function renderCalibrationPanel() {
+  const cal = state.calibration;
+  if (!cal) return;
+
+  const tableEl = document.getElementById('calibrationTable');
+  const chartEl = document.getElementById('calibrationChart');
+  const noteEl = document.getElementById('calibrationNote');
+
+  // ---- Table ----
+  if (tableEl) {
+    const rows = ['URGENT', 'WATCH', 'NONE'].map(t => {
+      const m = TIER_META[t];
+      const c = cal.tiers[t];
+      const rateCell = c.churnRate == null
+        ? '<span style="color:var(--text-muted);">no labels</span>'
+        : `<strong>${fmtPct(c.churnRate)}</strong> <span style="color:var(--text-muted);">(${c.churned}/${c.labeledN})</span>`;
+      return `
+        <tr>
+          <td><span class="status-badge ${m.badge}"><span class="status-dot ${m.dot}"></span> ${m.label}</span></td>
+          <td><strong>${c.n}</strong> (${c.share.toFixed(1)}%)</td>
+          <td>${rateCell}</td>
+          <td>${m.signal}</td>
+          <td>${m.action}</td>
+        </tr>`;
+    }).join('');
+
+    tableEl.innerHTML = `
+      <table class="benchmark-table">
+        <thead>
+          <tr>
+            <th>Assigned Tier</th>
+            <th>Accounts (n)</th>
+            <th>Actual Churn Rate</th>
+            <th>Signal Corroboration</th>
+            <th>Recommended Action</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  // ---- Chart ----
+  if (chartEl) {
+    if (!cal.hasOutcomes) {
+      chartEl.innerHTML = '<div style="font-size:0.80rem; color:var(--text-muted); padding:24px 4px;">No <code>Churn</code> outcome labels in the loaded dataset &mdash; nothing to calibrate against.</div>';
+    } else {
+      const baseY = 130, topY = 20, scaleH = baseY - topY; // 110px == 100%
+      const bars = [
+        { key: 'NONE', x: 60, color: '#10B981', label: 'Healthy' },
+        { key: 'WATCH', x: 140, color: '#D97706', label: 'Watch' },
+        { key: 'URGENT', x: 220, color: '#DC2626', label: 'Urgent' }
+      ].map(b => {
+        const rate = cal.tiers[b.key].churnRate;
+        if (rate == null) {
+          return `<text x="${b.x + 22}" y="${baseY - 4}" font-size="9" fill="#94A3B8" text-anchor="middle">n/a</text>
+                  <text x="${b.x + 22}" y="${baseY + 16}" font-size="9.5" font-weight="600" fill="#64748B" text-anchor="middle">${b.label}</text>`;
+        }
+        const h = Math.max(2, (rate / 100) * scaleH);
+        const y = baseY - h;
+        return `<rect x="${b.x}" y="${y.toFixed(1)}" width="45" height="${h.toFixed(1)}" rx="3" fill="${b.color}" />
+                <text x="${b.x + 22}" y="${(y - 6).toFixed(1)}" font-size="10" font-weight="700" fill="${b.color}" text-anchor="middle">${rate.toFixed(1)}%</text>
+                <text x="${b.x + 22}" y="${baseY + 16}" font-size="9.5" font-weight="600" fill="#64748B" text-anchor="middle">${b.label}</text>`;
+      }).join('');
+
+      chartEl.innerHTML = `
+        <svg class="svg-chart" viewBox="0 0 300 160" xmlns="http://www.w3.org/2000/svg">
+          <line x1="40" y1="20"  x2="285" y2="20"  stroke="#E2E8F0" stroke-dasharray="3 3" />
+          <line x1="40" y1="57"  x2="285" y2="57"  stroke="#E2E8F0" stroke-dasharray="3 3" />
+          <line x1="40" y1="93"  x2="285" y2="93"  stroke="#E2E8F0" stroke-dasharray="3 3" />
+          <line x1="40" y1="130" x2="285" y2="130" stroke="#CBD5E1" stroke-width="1.5" />
+          <text x="34" y="24"  font-size="9" fill="#94A3B8" text-anchor="end">100%</text>
+          <text x="34" y="61"  font-size="9" fill="#94A3B8" text-anchor="end">66%</text>
+          <text x="34" y="97"  font-size="9" fill="#94A3B8" text-anchor="end">33%</text>
+          <text x="34" y="133" font-size="9" fill="#94A3B8" text-anchor="end">0%</text>
+          ${bars}
+        </svg>`;
+    }
+  }
+
+  // ---- Note ----
+  if (noteEl) {
+    if (!cal.hasOutcomes) {
+      noteEl.textContent = 'The loaded data has no Churn column, so tier accuracy cannot be measured here. Tiers are still assigned by the same deterministic 2-signal rules.';
+    } else {
+      let msg = `${cal.labeled} of ${cal.total} accounts carry a Churn outcome label. `;
+      if (cal.monotonic === true) {
+        msg += 'Churn rate rises monotonically across tiers (URGENT ≥ WATCH ≥ NONE) on this data. ';
+      } else if (cal.monotonic === false) {
+        msg += 'Churn rate is NOT monotonic across tiers on this data — tier separation is weak here. ';
+      }
+      if (cal.watchWeak) {
+        msg += 'WATCH and NONE churn within 5 points of each other, so the WATCH tier adds little over baseline on this data.';
+      }
+      noteEl.textContent = msg.trim();
+    }
+  }
+}
+
 function renderPulseKPIs() {
   const urgent = state.scoredRecords.filter(r => r.severity_tier === 'URGENT').length;
   const watch = state.scoredRecords.filter(r => r.severity_tier === 'WATCH').length;
@@ -401,6 +565,19 @@ function renderPulseKPIs() {
   if (urgentEl) urgentEl.textContent = urgent;
   if (watchEl) watchEl.textContent = watch;
   if (noneEl) noneEl.textContent = none;
+
+  // KPI captions: prepend the live churn rate when outcome labels exist
+  const cal = state.calibration;
+  const caption = (tier, tail) => {
+    const rate = cal && cal.tiers[tier] ? cal.tiers[tier].churnRate : null;
+    return rate == null ? tail : `${rate.toFixed(1)}% churned · ${tail}`;
+  };
+  const urgentCap = document.getElementById('urgentCaption');
+  const watchCap = document.getElementById('watchCaption');
+  const noneCap = document.getElementById('noneCaption');
+  if (urgentCap) urgentCap.textContent = caption('URGENT', 'Weak usage + negative ticket');
+  if (watchCap) watchCap.textContent = caption('WATCH', 'Moderate usage + neutral ticket');
+  if (noneCap) noneCap.textContent = caption('NONE', 'Stable usage · no friction');
 
   // Proportion Bar
   const barUrgent = document.getElementById('barUrgent');
@@ -422,6 +599,23 @@ function renderPulseKPIs() {
   if (barNone) {
     barNone.style.width = `${nPct}%`;
     barNone.title = `Baseline: ${nPct}% (${none} accounts)`;
+  }
+
+  // Portfolio revenue-at-risk line + value-source transparency
+  const riskLine = document.getElementById('portfolioRiskLine');
+  if (riskLine && state.valueModel) {
+    const actionable = state.scoredRecords.filter(
+      r => r.severity_tier === 'URGENT' || r.severity_tier === 'WATCH'
+    );
+    const money = formatPortfolioAtRisk(actionable, state.valueModel);
+    const headline = money
+      ? `💰 <strong>${escapeHtml(money)}</strong> across ${actionable.length} actionable accounts`
+      : `⚖️ Ranking ${actionable.length} actionable accounts by risk-weighted value`;
+    const riskBasis = state.rankingBasis === 'calibrated'
+      ? "churn rates from this dataset's outcomes"
+      : "default tier priors (dataset has no stable outcome rates)";
+    riskLine.innerHTML = headline +
+      `<span class="value-source">value: ${escapeHtml(state.valueModel.label)} · risk: ${riskBasis}</span>`;
   }
 }
 
@@ -465,6 +659,9 @@ function renderQueueList() {
     const ticketSnippet = (r.Last_Support_Ticket || '').replace(/"/g, '&quot;');
     const cat = r.audit_explanation?.sentiment_raw?.matched_category || 'Support';
     const triagedBadgeHtml = r.isTriaged ? `<span class="triaged-badge">✓ Triaged</span>` : '';
+    const atRiskChip = state.valueModel
+      ? `<span class="chip chip-risk" title="Account value × churn risk above the healthy baseline (${(r.churn_prob * 100).toFixed(0)}% tier rate − baseline)">💰 ${escapeHtml(formatAtRisk(r.account_value, r.addressable_prob, state.valueModel))}</span>`
+      : '';
 
     return `
       <div class="queue-card ${isSelected ? 'selected' : ''}" data-id="${r.Customer_ID}">
@@ -479,6 +676,7 @@ function renderQueueList() {
           <span>${r.Email || 'No email'}</span>
           <span>·</span>
           <span class="chip chip-mono">${r.Login_Frequency} · ${r.Daily_Usage_Mins}m/day</span>
+          ${atRiskChip}
         </div>
         <div class="card-ticket-preview" title="${ticketSnippet}">
           💬 "${ticketSnippet}"
@@ -509,25 +707,27 @@ function renderInspector() {
       <div style="text-align: center; padding: 48px 16px; color: var(--text-muted);">
         <div style="font-size: 2rem; margin-bottom: 8px;">📋</div>
         <div style="font-weight: 700; color: var(--text-main);">Select an account from the queue</div>
-        <div style="font-size: 0.82rem; margin-top: 4px;">Choose any account to view its evidence summary, playbook, and email draft.</div>
+        <div style="font-size: 0.82rem; margin-top: 4px;">Choose any account to view its evidence summary, recommended action, and outreach template.</div>
       </div>
     `;
     return;
   }
 
   const tier = current.severity_tier;
-  let badgeHtml = '';
-  let churnStatHtml = '';
+  const calTier = (state.calibration && state.calibration.tiers[tier]) || {};
+  const churnClass = tier === 'URGENT' ? 'churn-urgent' : (tier === 'WATCH' ? 'churn-watch' : 'churn-none');
+  const churnStatText = calTier.churnRate == null
+    ? 'No outcome labels in dataset'
+    : `${calTier.churnRate.toFixed(1)}% churned in this cohort (n=${calTier.labeledN})`;
+  const churnStatHtml = `<span class="churn-stat ${churnClass}">${churnStatText}</span>`;
 
+  let badgeHtml = '';
   if (tier === 'URGENT') {
     badgeHtml = `<span class="status-badge badge-urgent"><span class="status-dot dot-urgent"></span> Urgent Risk</span>`;
-    churnStatHtml = `<span class="churn-stat churn-urgent">80.7% Historical Churn</span>`;
   } else if (tier === 'WATCH') {
     badgeHtml = `<span class="status-badge badge-watch"><span class="status-dot dot-watch"></span> Watchlist</span>`;
-    churnStatHtml = `<span class="churn-stat churn-watch">19.1% Historical Churn</span>`;
   } else {
     badgeHtml = `<span class="status-badge badge-none"><span class="status-dot dot-none"></span> Healthy Baseline</span>`;
-    churnStatHtml = `<span class="churn-stat churn-none">15.4% Baseline Churn</span>`;
   }
 
   const audit = current.audit_explanation || {};
@@ -578,6 +778,11 @@ function renderInspector() {
         <span class="chip">📅 Logins: <strong>${current.Login_Frequency}</strong></span>
         <span class="chip">⏱️ Daily Usage: <strong>${current.Daily_Usage_Mins} min/day</strong></span>
         <span class="chip">🏷️ Theme: <strong>${themeCat}</strong></span>
+        ${state.valueModel ? `<span class="chip chip-risk" title="Account value ${escapeHtml(formatValue(current.account_value, state.valueModel))} × churn risk above baseline (${(current.churn_prob * 100).toFixed(0)}% tier rate)">💰 <strong>${escapeHtml(formatAtRisk(current.account_value, current.addressable_prob, state.valueModel))}</strong></span>` : ''}
+      </div>
+
+      <div style="margin-top:10px; font-size:0.74rem; color:var(--text-muted);" title="Deterministic corroboration rule — no ML, no black-box score">
+        ⚙️ Deterministic rule: <code style="font-family:var(--font-mono); background:var(--bg-subtle); padding:2px 6px; border-radius:3px;">${escapeHtml(audit.rule_fired || 'n/a')}</code>
       </div>
     </div>
 
@@ -591,23 +796,23 @@ function renderInspector() {
     </div>
 
     ${tier !== 'NONE' ? `
-    <!-- Personalized Email Draft -->
+    <!-- Outreach Email Template -->
     <div class="collapsible-container">
       <div class="collapsible-header" id="emailExpanderToggle">
-        <span>✉️ Personalized Retention Email Draft (1-Click Copy)</span>
+        <span>✉️ Outreach Email Template</span>
         <span id="emailExpanderArrow">▲</span>
       </div>
       <div class="collapsible-content" id="emailExpanderContent">
         <div style="font-size:0.76rem; color:var(--text-muted); margin-bottom:4px;">
-          Context-aware email draft tailored to customer's exact complaint and usage metrics:
+          Pre-written starting point for this complaint type. Only the name and ticket quote are filled in &mdash; review and personalize before sending.
         </div>
         <div class="email-draft-box" id="emailDraftBox">${escapeHtml(emailDraft)}</div>
         <div class="inspector-btn-row">
           <button class="btn btn-primary btn-sm" id="copyEmailBtn">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            Copy Email Draft
+            Copy Template
           </button>
-          
+
           <button class="btn ${isTriaged ? 'btn-success' : 'btn-secondary'} btn-sm" id="triageToggleBtn">
             ${isTriaged ? '✓ Triaged' : 'Mark as Triaged'}
           </button>
@@ -621,37 +826,6 @@ function renderInspector() {
       </button>
     </div>
     `}
-
-    <!-- LEVEL 3: Diagnostic Audit Trail -->
-    <div class="collapsible-container">
-      <div class="collapsible-header" id="auditExpanderToggle">
-        <span>🔬 Diagnostic Audit Trail & Rule Logic (For Marcus)</span>
-        <span id="auditExpanderArrow">▼</span>
-      </div>
-      <div class="collapsible-content" id="auditExpanderContent" style="display:none;">
-        <div style="font-size:0.76rem; color:var(--text-muted); margin-bottom:8px;">
-          Deterministic verification: Exact corroboration rule, raw vectors, and historical validation benchmark.
-        </div>
-        
-        <div style="font-size:0.78rem; margin-bottom:8px;">
-          <strong>Rule Fired:</strong> <code style="font-family:var(--font-mono); background:var(--bg-subtle); padding:2px 6px; border-radius:3px;">${audit.rule_fired || 'N/A'}</code>
-        </div>
-        <div style="font-size:0.78rem; margin-bottom:12px;">
-          <strong>Validation Benchmark:</strong> ${audit.tier_validation_note || 'N/A'}
-        </div>
-
-        <div class="audit-details-grid">
-          <div>
-            <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">Engagement Vector</div>
-            <pre class="audit-json-box">${JSON.stringify(audit.engagement_raw || {}, null, 2)}</pre>
-          </div>
-          <div>
-            <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">Sentiment Vector</div>
-            <pre class="audit-json-box">${JSON.stringify(audit.sentiment_raw || {}, null, 2)}</pre>
-          </div>
-        </div>
-      </div>
-    </div>
   `;
 
   // Attach buttons & expander event listeners
@@ -659,7 +833,7 @@ function renderInspector() {
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
       navigator.clipboard.writeText(emailDraft).then(() => {
-        showToast('Email draft copied to clipboard!', '📋');
+        showToast('Template copied to clipboard!', '📋');
       }).catch(() => {
         showToast('Failed to copy to clipboard', '⚠️');
       });
@@ -692,18 +866,6 @@ function renderInspector() {
       const isHidden = emailContent.style.display === 'none';
       emailContent.style.display = isHidden ? 'flex' : 'none';
       emailArrow.textContent = isHidden ? '▲' : '▼';
-    });
-  }
-
-  // Audit expander
-  const auditToggle = document.getElementById('auditExpanderToggle');
-  const auditContent = document.getElementById('auditExpanderContent');
-  const auditArrow = document.getElementById('auditExpanderArrow');
-  if (auditToggle && auditContent) {
-    auditToggle.addEventListener('click', () => {
-      const isHidden = auditContent.style.display === 'none';
-      auditContent.style.display = isHidden ? 'grid' : 'none';
-      auditArrow.textContent = isHidden ? '▲' : '▼';
     });
   }
 }
